@@ -1,6 +1,6 @@
 The script all_simulations_steady_state_AND_time_to_extinction_REVIEW_commented.R was used to perform the simulations for the manuscript.
 
-Simulations were run using R version 3.4.4 (2018-03-15) -- "Someone to Lean On", on a Platform: x86_64-pc-linux-gnu (64-bit) with processor: 32-core processor × 64; memory: 125,8 GiB; os: Ubuntu 18.04.4 LTS
+Simulations were run using R version 3.4.4 (2018-03-15) -- "Someone to Lean On", on a Platform: x86_64-pc-linux-gnu (64-bit) with processor: 32-core processor × 64; memory: 125,8 GiB; os: Ubuntu 18.04.4 LTS.
 
 WARNING: the notation for the equation parameters below differs from that in the manuscript.
 
