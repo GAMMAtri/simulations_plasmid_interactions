@@ -1,0 +1,1663 @@
+---
+title: "simulation results analysis"
+author: "João Gama"
+output:
+  html_notebook:
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+### Notes
+The script to run the simulations is the following:  /Users/jga039/Documents/simulations/final_data/all_simulations_steady_state_AND_time_to_extinction_REVIEW_commented.R
+
+There are 3 types of output files:  
+gama_parameters_....txt --> a dataframe of the combinations (conjugation, fitness, loss, facilitations, epistasis, etc) used as input for the simulations  
+gama_steady_state_....txt --> a dataframe of the steady states of each of the combinations  
+gama_time_to_extinction_...txt --> a dataframe of the time each entitity in combination takes to go extinct (conditions where the plasmid was maintained are obviously not included)
+
+There are 4 files per type:  
+..singles_expanded_all.. --> simulations where there's only 1 type of interaction per combination (or no interaction at all)  
+..singles_fixed_competitor.. --> simulations where there's all possible interactions per combination, but the competitor plasmid is always the same.  
+..solo.. --> simulations where there's only 1 plasmid (includes controls of conjugation 10-10 and fitness >= 1)  
+..solo_density --> control simulations where there's only 1 plasmid and the initial density is 1e6 instead of 5e5
+
+In this script I'll analyse the data.
+This notebook is saved as /Users/jga039/Documents/simulations/full_simulation_analysis.Rmd along with the accompanying full_simulation_analysis.nb.html file.
+
+#### System/Version details:
+```{r}
+R.version
+```
+
+#### Loading required libraries:
+```{r}
+library('ggplot2'); library('patchwork'); library('ggthemes'); library('ggpubr') # for plotting
+library('reshape2') # to restructure dataframes
+library('pscl'); library('performance') # for R2 of logistic regression
+library('FSA'); library('rcompanion') # kruskal post hoc tests
+library('heplots') # for eta2
+library('openxlsx') # writing to excel files
+```
+
+#### creating workbook for the supp tables (excel file):
+```{r}
+wb = createWorkbook()
+```
+
+
+#    Analysing what happens when there is only one plasmid in the population.
+#### Importing the simulation output files 
+```{r}
+# steady state data ----
+solo_steady_0 = read.table(file = '/Users/jga039/Documents/simulations/final_data/gama_steady_state_solo_REVIEW.txt') # reading the table for steady states
+# the column ID has the following structure: "plasmid X":"plasmid Y"
+# and each plasmid has the structure: "conjugation efficiency"_"intracellular_conjugation_effect"_"intercellular_conjugation_effect"_"fitness"_"epistastic_effect"_"loss"_"loss_interaction_effect"
+# effect means the effect of the interaction on that plasmid; while "conjugation efficiency", "fitness" and "loss" are the innate values (before interaction)
+## this format is the same for all data sets imported from here on...
+
+# defining new columns (extracting info from column ID)
+solo_steady_0['focal'] = apply(X = as.matrix(solo_steady_0$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[1], split = '_'))[c(1,4,6)], collapse = '_') } ) # extracting the ID of plasmid X (focal) as "conjugation efficiency"_"fitness"_"loss"
+
+solo_steady_0['plasmid2'] = apply(X = as.matrix(solo_steady_0$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[2], split = '_'))[c(1,4,6)], collapse = '_') } ) # extracting the ID of plasmid Y (competitor) as "conjugation efficiency"_"fitness"_"loss"
+
+solo_steady_0['loss'] = as.factor(apply(X = as.matrix(solo_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[12] } )) # further extracting focal's loss
+
+solo_steady_0['fitness'] = as.factor(apply(X = as.matrix(solo_steady_0$focal), MARGIN = 1, FUN = function(x){ as.numeric(unlist(strsplit(x = as.character(x), split = '_'))[2]) } )) # further extracting focal's fitness
+
+solo_steady_0['conjugation'] = as.factor(apply(X = as.matrix(solo_steady_0$focal), MARGIN = 1, FUN = function(x){ as.numeric(unlist(strsplit(x = as.character(x), split = '_'))[1]) } )) # further extracting focal's conjugation
+
+ctrl_steady_0 = solo_steady_0[solo_steady_0$fitness %in% c('1','1.05') | solo_steady_0$conjugation == '1e-10',] # data set for controls of conjugation 10-10 and fitness >= 1
+solo_steady_0 = solo_steady_0[!(solo_steady_0$fitness %in% c('1','1.05') | solo_steady_0$conjugation == '1e-10'),] # excluding these controls from the "main" data set
+solo_steady_0$fitness = factor(solo_steady_0$fitness); solo_steady_0$conjugation = factor(solo_steady_0$conjugation) # recoding the 3 parameters as factors
+
+# time to extinction data
+solo_extinction = read.table(file = '/Users/jga039/Documents/simulations/final_data/gama_time_to_extinction_solo_REVIEW.txt') # reading the table for times to extinction
+solo_extinction['focal'] = apply(X = as.matrix(solo_extinction$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[1], split = '_'))[c(1,4,6)], collapse = '_') } ) # extracting the ID of plasmid X (focal) as "conjugation efficiency"_"fitness"_"loss"
+solo_extinction['plasmid2'] = apply(X = as.matrix(solo_extinction$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[2], split = '_'))[c(1,4,6)], collapse = '_') } ) # extracting the ID of plasmid Y (competitor) as "conjugation efficiency"_"fitness"_"loss"
+solo_extinction['loss'] = as.factor(apply(X = as.matrix(solo_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[12] } )) # further extracting focal's loss
+solo_extinction['fitness'] = as.factor(apply(X = as.matrix(solo_extinction$focal), MARGIN = 1, FUN = function(x){ as.numeric(unlist(strsplit(x = as.character(x), split = '_'))[2]) } )) # further extracting focal's fitness
+solo_extinction['conjugation'] = as.factor(apply(X = as.matrix(solo_extinction$focal), MARGIN = 1, FUN = function(x){ as.numeric(unlist(strsplit(x = as.character(x), split = '_'))[1]) } )) # further extracting focal's conjugation
+
+ctrl_extinction = solo_extinction[solo_extinction$fitness %in% c('1','1.05') | solo_extinction$conjugation == '1e-10',] # data set for controls of conjugation 10-10 and fitness >= 1
+solo_extinction = solo_extinction[!(solo_extinction$fitness %in% c('1','1.05') | solo_extinction$conjugation == '1e-10'),] # excluding these controls from the "main" data set
+solo_extinction$fitness = factor(solo_extinction$fitness); solo_extinction$conjugation = factor(solo_extinction$conjugation) # recoding the 3 parameters as factors
+```
+
+### Overview of plasmid maintenance
+```{r}
+solo_steady = solo_steady_0[solo_steady_0$X >= 1, ] # subset of stable plasmids
+print(paste('out of', nrow(solo_steady_0), 'plasmids', nrow(solo_steady), 'do not go to extinction'))
+```
+
+### How is the time to extinction affected by the variable: fitness, conjugation, loss?
+Apparently the plasmids always go extinct, but how does this vary between plasmids (ie different fitness, conjugation and loss rates)?
+Performing ANOVA (including interactions). All variables are numeric (not factors).  
+```{r}
+tmp = solo_extinction; tmp$fitness = as.numeric(as.character(tmp$fitness)); tmp$conjugation = as.numeric(as.character(tmp$conjugation)); tmp$loss = as.numeric(as.character(tmp$loss)) # variables as numeric instead of factors
+fit = aov(formula = log(X) ~ fitness * conjugation * loss, data = tmp) # performing the ANOVA
+plot(fit) # ANOVA diagnostic plots below
+```
+Diagnostics:  
+
+* Residuals vs Fitted (plot #1) - mean and spread of residuals is fairly constant.  
+* QQ plot (#2) - fairly linear distribution (no outliers).  
+* Scale-Location (#3) - breaks linearity for fittes values >10 (probably caused by the interactions between variables), but ANOVA is quite robust to deviations from homocedasticity (https://stats.stackexchange.com/questions/97098/practically-speaking-how-do-people-handle-anova-when-the-data-doesnt-quite-mee). Moreover, the ANOVA result is support by the linear regression plots below.  
+* Residuals vs Fitted (#4) - the two points (27,36) are not way beyond the cutoff of 1.  
+  
+Therefore, assumptions generally acceptable. 
+
+
+```{r, paged.print=FALSE}
+# creating Supp.TableS1
+Supp.TableS1 = cbind(data.frame(summary(fit)[[1]]),data.frame(etasq(fit, anova = F))); Supp.TableS1
+addWorksheet(wb, sheetName = "Supp.TableS1")
+writeData(wb, sheet = 1, x = Supp.TableS1, startCol = 1, startRow = 1, colNames = T, rowNames = T, borders = 'all')
+```
+Time to extinction is affected by fitness, conjugation, loss and the interaction between fitness and conjugation.  
+Plasmids persist more time with:  
+
+* increasing fitness  
+* increasing conjugation rates  
+* decreasing loss rates
+
+```{r}
+my_palete = colorblind_pal()(4) # defining a color blind palete with 4 colors 
+
+# creating figure 1 panel A
+tmp = solo_extinction; tmp$fitness = as.numeric(as.character(tmp$fitness))
+tmp['conjugation loss'] = as.factor(apply(X = tmp, MARGIN = 1, FUN = function(x) {paste(as.character(x['conjugation']), as.character(x['loss']))}))
+p1 = ggplot(data = tmp, mapping = aes(x = fitness, y = log10(X))) + theme_classic() + theme(legend.position = 'bottom', legend.direction = 'vertical') +
+  geom_hline(yintercept = 3.5, linetype = 'dashed') + geom_smooth(method="lm", se = F, aes(linetype = conjugation, color = loss), show.legend = T, formula = y ~ x) + 
+  scale_linetype_manual(values = c('solid','22','13')) + scale_x_continuous(breaks = unique(tmp$fitness)) + ylim(3.25,5.25) + scale_color_manual(values = my_palete) +
+  labs(tag = 'A', linetype = expression(gamma), color = expression(delta)) + ylab('ToE log10(h)') + xlab(expression(paste('fitness (',omega,')', sep = ''))) + theme(legend.title.align=0.5) + guides(linetype = guide_legend(override.aes = c(colour = 'black')))
+
+# creating figure 1 panel B
+tmp = solo_extinction; tmp$conjugation = as.numeric(as.character(tmp$conjugation))
+tmp['fitness loss'] = as.factor(apply(X = tmp, MARGIN = 1, FUN = function(x) {paste(as.character(x['fitness']), as.character(x['loss']))}))
+p2 = ggplot(data = tmp, mapping = aes(x = log10(conjugation), y = log10(X))) + theme_classic() + theme(legend.position = 'bottom', legend.direction = 'vertical') +
+   geom_hline(yintercept = 3.5, linetype = 'dashed') + geom_smooth(method="lm", se = F, aes(linetype = loss, color = fitness), show.legend = T, formula = y ~ x) +
+   scale_linetype_manual(values = c('solid','22','13')) + scale_x_continuous(breaks = log10(unique(tmp$conjugation))) + ylim(3.25,5.25) + scale_color_manual(values = my_palete) +
+  labs(tag = 'B', linetype = expression(delta), color = expression(omega)) + ylab('ToE log10(h)') + xlab(expression(paste('conjugation rate (',gamma,')', sep = ''))) + theme(legend.title.align=0.5) + guides(linetype = guide_legend(override.aes = c(colour = 'black')))
+
+# creating figure 1 panel C
+tmp = solo_extinction; tmp$loss = as.numeric(as.character(tmp$loss))
+tmp['fitness conjugation'] = as.factor(apply(X = tmp, MARGIN = 1, FUN = function(x) {paste(as.character(x['fitness']), as.character(x['conjugation']))}))
+p3 = ggplot(data = tmp, mapping = aes(x = log10(loss), y = log10(X))) + theme_classic() + theme(legend.position = 'bottom', legend.direction = 'vertical') +
+   geom_hline(yintercept = 3.5, linetype = 'longdash') + geom_smooth(method="lm", se = F, aes(linetype = conjugation, color = fitness), show.legend = T, formula = y ~ x) +
+   scale_linetype_manual(values = c('solid','22','13')) + scale_x_continuous(breaks = log10(unique(tmp$loss))) + ylim(3.25,5.25) + scale_color_manual(values = my_palete) +
+  labs(tag = 'C', linetype = expression(gamma), color = expression(omega)) + ylab('ToE log10(h)') + xlab(expression(paste('loss rate (',delta,')',sep = ''))) + theme(legend.title.align=0.5) + guides(linetype = guide_legend(override.aes = c(colour = 'black')))
+
+# assembling and exporting figure 1
+fig1 = p1 + p2 + p3; fig1
+ggsave(plot = fig1, filename = '/Users/jga039/Documents/simulations/analysis/figures_tables/fig_01.tiff', width = 210, height = 148, units = 'mm', dpi = 300)
+```
+
+
+### Control density Simulation
+To control for initial density effects, the starting density of the focal plasmid is 1e6 (instead of 5e5 cells) like when two plasmids are in the population.
+
+#### Importing the simulation output files for the density control
+```{r}
+# control data 
+# importing and restructuring data as described before
+solo_extinction_density = read.table(file = '/Users/jga039/Documents/simulations/final_data/gama_time_to_extinction_solo_density_REVIEW.txt')
+solo_extinction_density['focal'] = apply(X = as.matrix(solo_extinction_density$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[1], split = '_'))[c(1,4,6)], collapse = '_') } )
+solo_extinction_density['plasmid2'] = apply(X = as.matrix(solo_extinction_density$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[2], split = '_'))[c(1,4,6)], collapse = '_') } )
+solo_extinction_density['loss'] = as.factor(apply(X = as.matrix(solo_extinction_density$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[12] } ))
+solo_extinction_density['fitness'] = as.factor(apply(X = as.matrix(solo_extinction_density$focal), MARGIN = 1, FUN = function(x){ as.numeric(unlist(strsplit(x = as.character(x), split = '_'))[2]) } ))
+solo_extinction_density['conjugation'] = as.factor(apply(X = as.matrix(solo_extinction_density$focal), MARGIN = 1, FUN = function(x){ as.numeric(unlist(strsplit(x = as.character(x), split = '_'))[1]) } ))
+
+# incorporating the results from the previous model (standart values)
+solo_extinction_density['std'] = apply(X = solo_extinction_density, MARGIN = 1, FUN = function(x) {solo_extinction[solo_extinction$focal == x['focal'], 'X']} ) 
+```
+
+The time (hours) difference for the each plasmid between the two initial density conditions is
+```{r}
+solo_extinction_density$X - solo_extinction_density$std
+```
+then we can just use the original condition, as at most ajusting the densinty delays extinction by only 1 hour.
+
+#    Analysing what happens when there are two plasmids in the population.
+There are variable competitor plasmids, therefore analysing the focal should be enough. The two plasmids have always the same loss rate.
+
+#### Importing the simulation output files
+```{r}
+# steady state data
+# importing and restructuring data as described before
+# this now includes more columns relative to the interaction effects; for example: intrafx1 is the intracellular effect on X, interfx2 is the intercellular effect on Y, etc
+singles_steady_0 = read.table(file = '/Users/jga039/Documents/simulations/final_data/gama_steady_state_singles_expanded_all_REVIEW.txt')
+singles_steady_0['focal'] = apply(X = as.matrix(singles_steady_0$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[1], split = '_'))[c(1,4,6)], collapse = '_') } )
+singles_steady_0['competitor'] = apply(X = as.matrix(singles_steady_0$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[2], split = '_'))[c(1,4,6)], collapse = '_') } )
+singles_steady_0['competitor2'] = apply(X = as.matrix(singles_steady_0$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[2], split = '_'))[c(1,4)], collapse = '_') } )
+singles_steady_0['loss'] = as.factor(apply(X = as.matrix(singles_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[12] } ))
+singles_steady_0['epistasis'] = as.factor(apply(X = as.matrix(singles_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[11] } ))
+singles_steady_0['intrafx1'] = as.factor(apply(X = as.matrix(singles_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[2] } ))
+singles_steady_0['interfx1'] = as.factor(apply(X = as.matrix(singles_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[3] } ))
+singles_steady_0['intrafx2'] = as.factor(apply(X = as.matrix(singles_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[8] } ))
+singles_steady_0['interfx2'] = as.factor(apply(X = as.matrix(singles_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[9] } ))
+singles_steady_0['lossxy'] = as.factor(apply(X = as.matrix(singles_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[13] } ))
+singles_steady_0['fitness'] = as.factor(apply(X = as.matrix(singles_steady_0$focal), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[2]) }))
+singles_steady_0['conjugation'] = as.factor(apply(X = as.matrix(singles_steady_0$focal), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[1]) }))
+singles_steady_0['fitness2'] = as.factor(apply(X = as.matrix(singles_steady_0$competitor), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[2]) }))
+singles_steady_0['conjugation2'] = as.factor(apply(X = as.matrix(singles_steady_0$competitor), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[1]) }))
+
+# time to extinction data
+singles_extinction = read.table(file = '/Users/jga039/Documents/simulations/final_data/gama_time_to_extinction_singles_expanded_all_REVIEW.txt')
+singles_extinction['focal'] = apply(X = as.matrix(singles_extinction$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[1], split = '_'))[c(1,4,6)], collapse = '_') } )
+singles_extinction['competitor'] = apply(X = as.matrix(singles_extinction$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[2], split = '_'))[c(1,4,6)], collapse = '_') } )
+singles_extinction['competitor2'] = apply(X = as.matrix(singles_extinction$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[2], split = '_'))[c(1,4)], collapse = '_') } )
+singles_extinction['loss'] = as.factor(apply(X = as.matrix(singles_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[12] } ))
+singles_extinction['epistasis'] = as.factor(apply(X = as.matrix(singles_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[11] } ))
+singles_extinction['intrafx1'] = as.factor(apply(X = as.matrix(singles_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[2] } ))
+singles_extinction['interfx1'] = as.factor(apply(X = as.matrix(singles_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[3] } ))
+singles_extinction['intrafx2'] = as.factor(apply(X = as.matrix(singles_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[8] } ))
+singles_extinction['interfx2'] = as.factor(apply(X = as.matrix(singles_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[9] } ))
+singles_extinction['lossxy'] = as.factor(apply(X = as.matrix(singles_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[13] } ))
+singles_extinction['fitness'] = as.factor(apply(X = as.matrix(singles_extinction$focal), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[2]) }))
+singles_extinction['conjugation'] = as.factor(apply(X = as.matrix(singles_extinction$focal), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[1]) }))
+singles_extinction['fitness2'] = as.factor(apply(X = as.matrix(singles_extinction$competitor), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[2]) }))
+singles_extinction['conjugation2'] = as.factor(apply(X = as.matrix(singles_extinction$competitor), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[1]) }))
+
+# incorporating columns relative to the outcome of having only the focal plasmid X (i.e. no competitor - column "alone"), and to not having interactions "no_interaction"
+singles_extinction['alone'] = apply(X = as.matrix(singles_extinction$focal), MARGIN = 1, FUN = function(x) { solo_extinction[solo_extinction$focal == x, 'X']})
+singles_extinction['no_interaction'] = apply(X = singles_extinction, MARGIN = 1, FUN = function(x) { 
+  singles_extinction[ singles_extinction$focal == x['focal'] & singles_extinction$competitor == x['competitor'] &
+                 singles_extinction$epistasis == '0' & singles_extinction$intrafx1 == '1' & singles_extinction$interfx1 == '1' &
+                 singles_extinction$intrafx2 == '1' & singles_extinction$interfx2 == '1' & singles_extinction$lossxy == '1', 'X_XY']})
+```
+
+##    Case 1: the two plasmids don't interact (ie don't affect each other's fitness or conjugation).
+```{r}
+# subsetting data for the case of no interactions --> Model 2: Two non-interacting plasmids
+no_interaction_ex = singles_extinction[singles_extinction$epistasis == '0' & singles_extinction$intrafx1 == '1' & singles_extinction$interfx1 == '1' &
+                                      singles_extinction$intrafx2 == '1' & singles_extinction$interfx2 == '1' & singles_extinction$lossxy == '1',]
+no_interaction_steady = singles_steady_0[singles_steady_0$epistasis == '0' & singles_steady_0$intrafx1 == '1' & singles_steady_0$interfx1 == '1' &
+                                      singles_steady_0$intrafx2 == '1' & singles_steady_0$interfx2 == '1' & singles_steady_0$lossxy == '1',]
+```
+
+### Overview of plasmid maintenance
+```{r} 
+print(paste('out of', nrow(no_interaction_steady), 'combinations, the focal plasmid does not become extinct in', nrow(no_interaction_steady[no_interaction_steady$X >= 1 | no_interaction_steady$XY >= 1, ])))
+print(paste('out of', nrow(no_interaction_steady), 'combinations, the competitor plasmid does not become extinct in', nrow(no_interaction_steady[no_interaction_steady$X >= 1 | no_interaction_steady$XY >= 1, ])))
+```
+If there are no interactions the plasmids always goes to extinction.
+
+### How does the focal plasmid face the competitor and the doubles?
+```{r}
+tmp = no_interaction_ex[no_interaction_ex$X == no_interaction_ex$Y,]
+tmp$fitness = as.numeric(as.character(tmp$fitness)); tmp$fitness2 = as.numeric(as.character(tmp$fitness2))
+tmp$conjugation = as.numeric(as.character(tmp$conjugation)); tmp$conjugation2 = as.numeric(as.character(tmp$conjugation2)); 
+print(paste('out of', nrow(no_interaction_steady), 'cases the focal plasmid X goes extinct at the same time as Y in', nrow(tmp)))
+print(paste('among these, in', nrow(tmp[tmp$fitness == tmp$fitness2 & tmp$conjugation == tmp$conjugation2,]), 'cases the two plasmids have the same characteristics'))
+print(paste('among all', nrow(no_interaction_ex), 'cases, the two plasmids have the same characteristics in', nrow(no_interaction_ex[no_interaction_ex$fitness == no_interaction_ex$fitness2 & no_interaction_ex$conjugation == no_interaction_ex$conjugation2,])))
+```
+thus when the two plasmids have the same characteristics (fitness, conjugation and loss), they go extinct at the same time - as expected. 
+
+```{r}
+tmp = no_interaction_ex[no_interaction_ex$X < no_interaction_ex$Y,]
+tmp$fitness = as.numeric(as.character(tmp$fitness)); tmp$fitness2 = as.numeric(as.character(tmp$fitness2))
+tmp$conjugation = as.numeric(as.character(tmp$conjugation)); tmp$conjugation2 = as.numeric(as.character(tmp$conjugation2)); 
+print(paste('out of', nrow(no_interaction_steady), 'cases the focal plasmid X goes extinct before Y in', nrow(tmp)))
+print(paste('among these, in', nrow(tmp[tmp$fitness < tmp$fitness2,]), 'cases X is less fit than Y; and in',nrow(tmp[tmp$fitness == tmp$fitness2 & tmp$conjugation < tmp$conjugation2,]), 'X and Y have the same fitness but X has lower conjugation efficiency'))
+print(paste('among all', nrow(no_interaction_ex), 'cases X is less fit than Y in', nrow(no_interaction_ex[as.numeric(as.character(no_interaction_ex$fitness)) < as.numeric(as.character(no_interaction_ex$fitness2)),]), 'and X, and Y have the same fitness but X has lower conjugation efficiency in', nrow(no_interaction_ex[as.numeric(as.character(no_interaction_ex$fitness)) == as.numeric(as.character(no_interaction_ex$fitness2)) & as.numeric(as.character(no_interaction_ex$conjugation)) < as.numeric(as.character(no_interaction_ex$conjugation2)),])))
+```
+thus X goes extinct faster than Y when it has higher cost or equal cost but lower conjugation rate - as expected.  
+
+### How is the time to extinction affected by the presence of a competitor plasmid?
+```{r}
+shapiro.test(no_interaction_ex$alone - no_interaction_ex$X_XY) # checking normality
+wilcox.test(x = no_interaction_ex$X_XY, y = no_interaction_ex$alone, paired = T) # wilcoxon test
+```
+Shapiro-Wilk test reveals the difference is not normaly distributed, therefore performing Wilcoxon test instead of T-test.  
+There is a significant effect of having a competitor plasmid in the population (Wilcoxon p-value < 2.2e-16), such the the focal plasmid goes faster to extinction than if it was alone. This is the conclusion for plasmid X, representing overall extinction (both X and XY).
+
+```{r}
+# creating and exporting figure 2
+fig2 = ggplot(data = no_interaction_ex, mapping = aes(x = log10(alone), y = log10(X_XY))) + theme_classic() +
+  xlab('Y absent\nToE log10(h)') + ylab('Y present\nToE log10(h)') + geom_point(shape = 21, fill = NA, alpha = 3/4) +
+  geom_abline(slope = 1, intercept = 0)
+fig2
+ggsave(plot = fig2, filename = '/Users/jga039/Documents/simulations/analysis/figures_tables/fig_02.tiff', width = 210/2, height = 148/2, units = 'mm', dpi = 300)
+```
+
+
+##    Case 2: the two plasmids are epistatic (ie interaction only affects the fitness of doubles).
+```{r}
+# subsetting data for the case of epistasis --> Model 3: Interactions affecting fitness (epistasis)
+epistasis_ex = singles_extinction[singles_extinction$intrafx1 == '1' & singles_extinction$interfx1 == '1' &
+                                      singles_extinction$intrafx2 == '1' & singles_extinction$interfx2 == '1' & singles_extinction$lossxy == '1',]
+epistasis_steady = singles_steady_0[singles_steady_0$intrafx1 == '1' & singles_steady_0$interfx1 == '1' &
+                                      singles_steady_0$intrafx2 == '1' & singles_steady_0$interfx2 == '1' & singles_steady_0$lossxy == '1',]
+# adding column with the fitness of XY to these data sets
+epistasis_steady['fit_XY'] = as.numeric(as.character(epistasis_steady$fitness)) * as.numeric(as.character(epistasis_steady$fitness2)) + as.numeric(as.character(epistasis_steady$epistasis))
+epistasis_ex['fit_XY'] = as.numeric(as.character(epistasis_ex$fitness)) * as.numeric(as.character(epistasis_ex$fitness2)) + as.numeric(as.character(epistasis_ex$epistasis))
+```
+
+### Overview of plasmid maintenance
+```{r} 
+print(paste('out of', nrow(epistasis_steady), 'cases, the focal plasmid does not go to extinction in', nrow(epistasis_steady[epistasis_steady$X >= 1 | epistasis_steady$XY >= 1, ]), 'with epistasis distributed as:')); table(epistasis_steady[epistasis_steady$X >= 1 | epistasis_steady$XY >= 1, 'epistasis'])
+print(paste('out of', nrow(epistasis_steady), 'total cases,',nrow(epistasis_steady[epistasis_steady$fit_XY > 1, ]), 'have fitness > 1, and of which',
+            ifelse(test = all(epistasis_steady[epistasis_steady$fit_XY > 1, 'epistasis'] %in% c('0.05','0.1')), yes = 'all', 'some/none'),
+            'have positive epistasis.',nrow(epistasis_steady[epistasis_steady$fit_XY == 1, ]), 'have fitness = 1'))
+
+tmp = epistasis_steady[epistasis_steady$X >= 1 | epistasis_steady$XY >= 1, ]
+print(paste('out of', nrow(tmp), 'survival cases,',nrow(tmp[tmp$fit_XY > 1, ]), 'have fitness > 1, and', nrow(tmp[tmp$fit_XY == 1, ]), 'have fitness = 1'))
+
+print(paste('among the',nrow(tmp),'cases of survival the density of XY is always higher than of X & Y?', unique(tmp$X < tmp$XY & tmp$Y < tmp$XY)))
+```
+
+```{r, paged.print=FALSE}
+print(paste('there are',nrow(tmp[tmp$O < 1, ]),'cases where there are no plasmid free in the population'))
+tmp2 = epistasis_steady[epistasis_steady$fit_XY >= 1, ]
+print(paste('these are the loss parameters leading to no plasmid free in the population:', unique(tmp[tmp$O < 1, 'loss'])))
+print('In the data set loss is distributed as:')
+table(tmp2$loss)
+
+tmp[tmp$X < 1, 'X'] = 0; tmp[tmp$O < 1, 'O'] = 0; tmp[tmp$XY < 1, 'XY'] = 0; tmp[tmp$Y < 1, 'Y'] = 0
+tmp['freqØ'] = tmp$O / (tmp$O + tmp$X + tmp$Y + tmp$XY); tmp['freqX'] = tmp$X / (tmp$O + tmp$X + tmp$Y + tmp$XY)
+print(paste('minimum of Ø freq is', 100 * min(tmp$freqØ), '% and the maximum is', 100 * max(tmp$freqØ), '%'))
+```
+
+```{r, paged.print=FALSE}
+print(paste('these are the cases of fitness > 1 that go to exctinction:'))
+data.frame(apply(X = epistasis_steady[(!(epistasis_steady$X >= 1 | epistasis_steady$XY >= 1)) & epistasis_steady$fit_XY > 1, ], MARGIN = 1, FUN = function(x) { paste(paste(x['focal'], x['competitor'], sep = ' vs '), x['epistasis'], sep = ' and e = ')}))
+```
+
+```{r}
+tmp = epistasis_ex[epistasis_ex$epistasis %in% c('0.05','0.1'),]
+print(paste('among the',nrow(epistasis_ex),'cases of extinction, there are',nrow(tmp), 'cases of positive epistasis, such that in:',
+            nrow(tmp[as.numeric(as.character(tmp$fitness)) < as.numeric(as.character(tmp$fit_XY)),]), 'XY has higher fitness than X, in',
+            nrow(tmp[as.numeric(as.character(tmp$fitness)) > as.numeric(as.character(tmp$fit_XY)),]), 'XY has lower fitness than X, in',
+            nrow(tmp[as.numeric(as.character(tmp$fitness)) < as.numeric(as.character(tmp$fit_XY)) & as.numeric(as.character(tmp$fitness2)) < as.numeric(as.character(tmp$fit_XY)),]), 'XY has higher fitness than both X & Y, and in',
+            nrow(tmp[as.numeric(as.character(tmp$fitness)) > as.numeric(as.character(tmp$fit_XY)) & as.numeric(as.character(tmp$fitness2)) > as.numeric(as.character(tmp$fit_XY)),]), 'XY has lower fitness than both X & Y'))
+```
+Among the surviving cases the double XY is always present at higher frequencies in the population.
+Among the 736 cases of positive epistasis that go to extinction XY has higher fitness than both X & Y in 223.
+
+```{r}
+tmp = epistasis_ex[epistasis_ex$epistasis %in% c('0.05','0.1'),]
+tmp = tmp[as.numeric(as.character(tmp$fitness)) > as.numeric(as.character(tmp$fit_XY)) & as.numeric(as.character(tmp$fitness2)) > as.numeric(as.character(tmp$fit_XY)),]
+print(paste('Among the',nrow(tmp),'cases of positive epistasis where XY the least fit, is XY the plasmidic entity faster getting extinct?', paste(unique(tmp$X > tmp$XY & tmp$Y > tmp$XY), collapse = '/')))
+```
+But if XY is the least fit it is the least stable.
+
+```{r, paged.print=FALSE}
+tmp = epistasis_ex[epistasis_ex$epistasis %in% c('0.05','0.1'),]
+tmp = tmp[as.numeric(as.character(tmp$fitness)) < as.numeric(as.character(tmp$fit_XY)) & as.numeric(as.character(tmp$fitness2)) < as.numeric(as.character(tmp$fit_XY)),]
+print(paste('Among the',nrow(tmp),'cases of positive epistasis where XY is the fitest, is XY the plasmidic entity taking longer to get extinct?', paste(unique(tmp$X < tmp$XY & tmp$Y < tmp$XY), collapse = '/')))
+table(tmp$X < tmp$XY & tmp$Y < tmp$XY)
+```
+Therefore, even if XY is fitter, doesn't mean it is more stable.
+
+```{r, paged.print=FALSE}
+tmp = epistasis_ex[epistasis_ex$epistasis == '-0.05',]
+print(paste('among the',nrow(epistasis_ex),'cases of extinction, there are',nrow(tmp), 'cases of negative epistasis. Does XY always have lower fitness than both X & Y?',
+            unique(as.numeric(as.character(tmp$fitness)) > as.numeric(as.character(tmp$fit_XY)) & as.numeric(as.character(tmp$fitness2)) > as.numeric(as.character(tmp$fit_XY)))))
+print(paste('then is XY the plasmidic entity faster getting extinct?', paste(unique(tmp$X > tmp$XY & tmp$Y > tmp$XY), collapse = '/')))
+table(tmp$X > tmp$XY & tmp$Y > tmp$XY)
+
+print(paste('these are the cases of negative epistasis where XY is not the entity going faster to exctinction:'))
+tmp2 = tmp[!(tmp$X > tmp$XY & tmp$Y > tmp$XY),]
+tmp2[,c('X','XY','Y','focal','competitor','epistasis')]
+```
+In all 432 cases of negative epistasis XY is less fit than X & Y, however it is not necessarily the one getting extinct first.
+
+```{r, paged.print=FALSE}
+print(paste('these are the cases of negative epistasis, fitness of either (but not both) X & Y is 0.975, loss is not 1e-4, and conjugation of both X & Y is 1e-11:'))
+tmp[tmp$conjugation == '1e-11' & tmp$conjugation2 == '1e-11' & tmp$loss != '1e-04' & (tmp$fitness == '0.975' | tmp$fitness2 == '0.975') & (!(tmp$fitness == '0.975' & tmp$fitness2 == '0.975')), c('focal','competitor')]
+```
+Thus negatively epistatic doubles can persist longer than one of the singles if conjugation and fitness are high and loss is low.
+
+### Control: solo with fitness >=1
+
+```{r}
+print(paste('XY cells can have fitness >= 1, as:', paste(unique(epistasis_steady$fit_XY)[unique(epistasis_steady$fit_XY) >=1], collapse = ' ; ' )))
+ctrl_epis = ctrl_steady_0[ctrl_steady_0$fitness %in% c('1','1.05'),]; ctrl_epis$fitness = factor(ctrl_epis$fitness); ctrl_epis$conjugation = factor(ctrl_epis$conjugation)
+print(paste('so a control with a single plasmid with fitness as:', paste(unique(ctrl_epis$fitness), collapse = ' ; ' )))
+print(paste('among these',nrow(ctrl_epis),'the plasmid persists in',nrow(ctrl_epis[ctrl_epis$X >= 1,]),'and goes extinct when:',paste(ctrl_epis[ctrl_epis$X < 1,'focal'], collapse = ' or '))) 
+```
+
+```{r, paged.print=FALSE}
+ctrl_epis['freqØ'] = ctrl_epis$O / (ctrl_epis$O + ctrl_epis$X)
+print(paste('Ø freq ranges between:', min(ctrl_epis[ctrl_epis$X >= 1, 'freqØ']), 'and', max(ctrl_epis[ctrl_epis$X >= 1, 'freqØ']),
+            'with an average of', mean(ctrl_epis[ctrl_epis$X >= 1, 'freqØ'])))
+```
+
+### How is the time to extinction affected by epistasis?
+
+```{r}
+# creating figure 3 panel A
+my_palete = colorblind_pal()(4)
+p1 = ggplot(data = epistasis_ex[epistasis_ex$epistasis != '0',], mapping = aes(x = log10(no_interaction), y = log10(X_XY), color = epistasis)) + 
+  theme_classic() + labs(tag = 'A', color = 'ε') + geom_abline(slope = 1, intercept = 0) + geom_point(shape = 21, fill = NA, alpha = 3/4) +  
+  xlab(bquote(atop(epsilon==0,'ToE log10(h)'))) + ylab(bquote(atop(epsilon!=0,'ToE log10(h)'))) + theme(legend.title.align = 0.5) + scale_color_manual(values = my_palete[2:4], name = expression(paste('epistasis (',epsilon,')')))
+p1
+```
+
+Performing group comparisons by epistasis.  
+```{r, paged.print=FALSE}
+print(paste('total cases:', nrow(epistasis_ex)))
+epistasis_ex['ratio_e0'] = epistasis_ex$X_XY / epistasis_ex$no_interaction # ratio against no epistasis
+
+# encoding epistasis as factor variables for further analyses
+epistasis_ex[epistasis_ex$epistasis == '0', 'epis_fac'] = 'zero'; epistasis_ex[epistasis_ex$epistasis == '-0.05', 'epis_fac'] = 'neg'; epistasis_ex[epistasis_ex$epistasis == '0.05', 'epis_fac'] = 'pos'
+epistasis_ex[epistasis_ex$epistasis == '0.1', 'epis_fac'] = 'pos_plus'; epistasis_ex$epis_fac = as.factor(x = epistasis_ex$epis_fac)
+epistasis_ex['outcome_epis0'] = ifelse(epistasis_ex$ratio_e0 < 1, 'decrease', 'increase'); epistasis_ex[epistasis_ex$ratio_e0 == 1, 'outcome_epis0'] = 'no effect'
+epistasis_ex$outcome_epis0 = as.factor(x = epistasis_ex$outcome_epis0)
+
+
+x2 = as.data.frame(t(unlist(kruskal.test(x = epistasis_ex$ratio_e0, g = epistasis_ex$epis_fac))))[c(4,2:3)] # result of kruskal test
+
+# summarizing the stats of the quantitative analysis
+x1 = data.frame()
+for(i in unique(epistasis_ex$epistasis)) { x1 = rbind(x1,cbind(i,median(epistasis_ex[epistasis_ex$epistasis == i,'ratio_e0']),sd(epistasis_ex[epistasis_ex$epistasis == i,'ratio_e0']))) }
+colnames(x1) = c('epistasis','median','standard deviation'); x1['subs'] = as.character(x1$epistasis)
+dun = dunnTest(ratio_e0 ~ epis_fac, data = epistasis_ex, method = 'bonferroni')$res
+
+# adding results dunn post hoc test
+x3 = data.frame(cldList(comparison = dun$Comparison, p.value = dun$P.adj, threshold = 0.05))
+subs = data.frame(cond = c('neg','pos','pos_plus','zero'), subs = c('-0.05','0.05','0.1','0'))
+for (i in subs$cond) { x3[x3$Group == i,'subs'] = subs[subs$cond == i, 'subs']}
+tmp = data.frame(); for(i in x1$subs) { tmp = rbind(tmp, cbind(x1[x1$subs == i, c(1:3)], x3[x3$subs == i, 'Letter']))}
+colnames(tmp) = c('interaction value',colnames(tmp)[2:3],"Dunn's test*"); x1 = tmp; x1$`interaction value` = as.character(x1$`interaction value`);  x1 = x1[order(x1$`interaction value`),]
+
+x3 = data.frame('* groups displaying the same letter are not significantly different') # note for letter meaning
+
+# chi square test
+x4 = table(epistasis_ex$epis_fac, epistasis_ex$outcome_epis0)
+x5 = chisq.test(x = x4, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)] 
+
+# Fisher pairwise Nominal Independence test
+res = pairwiseNominalIndependence(x = x4, fisher = T, gtest = F, chisq = T, correct = 'yates')
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame.matrix(x5$observed); for(i in rownames(x4)) { x4[i,'interaction value'] = subs[subs$cond == i, 'subs']}; x4 = x4[order(x4$`interaction value`),]
+
+x6 = as.data.frame(cldList(comparison = res$Comparison, p.value = res$p.adj.Fisher, threshold = .05))
+for(i in x6$Group) { x4[i, "Fisher's exact test pairwise Nominal Independence*"] = x6[x6$Group == i, 'Letter']}
+x4 = x4[,c('interaction value',colnames(x4)[colnames(x4) != 'interaction value'])]
+colnames(x1)[1] = colnames(x4)[1] = 'epistasis (ε)'
+
+# creating Supp.TableS2
+addWorksheet(wb, sheetName = "Supp.TableS2")
+writeData(wb, sheet = 2, x = x2, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 2, x = x1, startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 2, x = x7, startCol = (ncol(x1) + 2), startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 2, x = x4, startCol = (ncol(x1) + 2), startRow = (nrow(x7) + 2), borders = 'all')
+writeData(wb, sheet = 2, x = x3, startCol = 1, startRow = (nrow(x7) + 2 + nrow(x4) + 2), colNames = F)
+
+x2; x1; x7; x4; x3
+```
+Significant kruskal wallis - all groups are different: time to extinction normalized by e = 0 increases with the strength of epistasis.
+Significant Chi square - all groups are different in terms of outcome distribution.
+
+
+### Can epistasis increase time to extinction relatively to alone?
+```{r}
+# creating figure 3 panel B
+p2 = ggplot(data = epistasis_ex, mapping = aes(x = log10(alone), y = log10(X_XY), color = epistasis)) + 
+  theme_classic() + labs(tag = 'B', color = 'ε') +
+  geom_abline(slope = 1, intercept = 0) + geom_point(shape = 21, fill = NA, alpha = 3/4) + scale_color_manual(values = my_palete[c(2,1,3:4)], name = expression(paste('epistasis (',epsilon,')'))) + 
+  xlab('Y absent\nToE log10(hours)') + ylab('Y present\nToE log10(hours)') + theme(legend.title.align = 0.5)
+```
+
+```{r}
+# assembling and exporting figure 3
+fig5 = p1 + p2
+fig5
+ggsave(plot = fig5, filename = '/Users/jga039/Documents/simulations/analysis/figures_tables/fig_03.tiff', width = 210, height = 148/2, units = 'mm', dpi = 300)
+```
+
+```{r, paged.print=FALSE}
+print(paste('total cases:', nrow(epistasis_ex)))
+epistasis_ex['ratio_alone'] = epistasis_ex$X_XY / epistasis_ex$alone # ratio against absence of competitor
+
+# encoding variable as factor for further analyses
+epistasis_ex['outcome_alone'] = ifelse(epistasis_ex$ratio_alone < 1, 'decrease', 'increase'); epistasis_ex[epistasis_ex$ratio_alone == 1, 'outcome_alone'] = 'null'
+epistasis_ex$outcome_alone = as.factor(epistasis_ex$outcome_alone)
+
+x2 = as.data.frame(t(unlist(kruskal.test(x = epistasis_ex$ratio_alone, g = epistasis_ex$epis_fac))))[c(4,2:3)] # result of kruskal test
+ 
+# summarizing the stats of the quantitative analysis
+x1 = data.frame()
+for(i in unique(epistasis_ex$epistasis)) { x1 = rbind(x1,cbind(i,median(epistasis_ex[epistasis_ex$epistasis == i,'ratio_alone']),sd(epistasis_ex[epistasis_ex$epistasis == i,'ratio_alone']))) }
+colnames(x1) = c('epistasis','median','standard deviation'); x1['subs'] = as.character(x1$epistasis)
+dun = dunnTest(ratio_alone ~ epis_fac, data = epistasis_ex, method = 'bonferroni')$res
+
+# adding results dunn post hoc test
+x3 = data.frame(cldList(comparison = dun$Comparison, p.value = dun$P.adj, threshold = 0.05))
+subs = data.frame(cond = c('neg','pos','pos_plus','zero'), subs = c('-0.05','0.05','0.1','0'))
+for (i in subs$cond) { x3[x3$Group == i,'subs'] = subs[subs$cond == i, 'subs']}
+tmp = data.frame(); for(i in x1$subs) { tmp = rbind(tmp, cbind(x1[x1$subs == i, c(1:3)], x3[x3$subs == i, 'Letter']))}
+colnames(tmp) = c('interaction value',colnames(tmp)[2:3],"Dunn's test*"); x1 = tmp; x1$`interaction value` = as.character(x1$`interaction value`);  x1 = x1[order(x1$`interaction value`),]
+
+x3 = data.frame('* groups displaying the same letter are not significantly different') # note for letter meaning
+
+# chi square test
+x4 = table(epistasis_ex$epis_fac, epistasis_ex$outcome_alone)
+x5 = chisq.test(x = x4, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)] 
+
+# Fisher pairwise Nominal Independence test
+res = pairwiseNominalIndependence(x = x4, fisher = T, gtest = F, chisq = T, correct = 'yates')
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame.matrix(x5$observed); for(i in rownames(x4)) { x4[i,'interaction value'] = subs[subs$cond == i, 'subs']}; x4 = x4[order(x4$`interaction value`),]
+x6 = as.data.frame(cldList(comparison = res$Comparison, p.value = res$p.adj.Fisher, threshold = .05))
+for(i in x6$Group) { x4[i, "Fisher's exact test pairwise Nominal Independence*"] = x6[x6$Group == i, 'Letter']}
+x4 = x4[,c('interaction value',colnames(x4)[colnames(x4) != 'interaction value'])]
+colnames(x1)[1] = colnames(x4)[1] = 'epistasis (ε)'
+
+# creating Supp.TableS3
+addWorksheet(wb, sheetName = "Supp.TableS3")
+writeData(wb, sheet = 3, x = x2, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 3, x = x1, startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 3, x = x7, startCol = (ncol(x1) + 2), startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 3, x = x4, startCol = (ncol(x1) + 2), startRow = (nrow(x7) + 2), borders = 'all')
+writeData(wb, sheet = 3, x = x3, startCol = 1, startRow = (nrow(x7) + 2 + nrow(x4) + 2), colNames = F)
+
+x2; x1; x7; x4; x3
+```
+Significant kruskal wallis - e < 0 and e = 0 are not different, e = 0.05 and e = 0.1 are different between each other and the other groups.
+Same conclusion for Chisq.
+Thus some combinations with positive epistasis allow plasmids to persist longer, while with e <= 0 plasmids always go extinct faster.
+
+
+##    Case 3: the focal plasmid as target of intracelular interactions on conjugation.
+```{r}
+# subsetting data for the case of intracellular conjugation effects --> Model 4: Intracellular interactions affecting conjugation: 3.4.1	Plasmid X as the target of interactions
+intrafx1_ex = singles_extinction[singles_extinction$epistasis == '0' & singles_extinction$interfx1 == '1' &
+                                      singles_extinction$intrafx2 == '1' & singles_extinction$interfx2 == '1' & singles_extinction$lossxy == '1',]
+intrafx1_steady = singles_steady_0[singles_steady_0$epistasis == '0' & singles_steady_0$interfx1 == '1' &
+                                      singles_steady_0$intrafx2 == '1' & singles_steady_0$interfx2 == '1' & singles_steady_0$lossxy == '1',]
+
+# adding column with the conjugation from XY to these data sets
+intrafx1_steady['conj_X(Y)'] = as.numeric(as.character(intrafx1_steady$conjugation)) * as.numeric(as.character(intrafx1_steady$intrafx1))
+intrafx1_ex['conj_X(Y)'] = as.numeric(as.character(intrafx1_ex$conjugation)) * as.numeric(as.character(intrafx1_ex$intrafx1))
+```
+
+### Overview of plasmid maintenance
+```{r, paged.print=FALSE} 
+print(paste('out of', nrow(intrafx1_steady), 'cases, the focal plasmid does not go to extinction in', nrow(intrafx1_steady[intrafx1_steady$X >= 1 | intrafx1_steady$XY >= 1, ])))
+print('the intracelluar conjugation effects on X are distributed as:'); table(intrafx1_steady$intrafx1)
+```
+X is always doomed to extinction.
+
+### How is the time to extinction affected by intrafx1?
+Comparisons by intrafx1.
+```{r}
+# creating figure 4 panel A
+my_palete = colorblind_pal()(3)
+p1 = ggplot(data = intrafx1_ex[intrafx1_ex$intrafx1 != '1',], mapping = aes(x = log10(no_interaction), y = log10(X_XY), color = intrafx1)) + 
+  theme_classic() + labs(tag = 'A', color = expression('α'[X])) + geom_abline(slope = 1, intercept = 0) + geom_point(shape = 21, fill = NA, alpha = 3/4) +  
+  xlab(bquote(atop(alpha[X]==1,'ToE log10(h)'))) + ylab(bquote(atop(alpha[X]!=1,'ToE log10(h)'))) + theme(legend.title.align = 0.5) + scale_color_manual(values = my_palete[2:3], name = bquote(atop('intracel. effect',paste('on X (',alpha[X],')'))))
+p1
+```
+
+```{r, paged.print=FALSE}
+intrafx1_ex['ratio_a0'] = intrafx1_ex$X_XY / intrafx1_ex$no_interaction # ratio against no interaction
+
+# encoding variable as factor  for further analyses
+intrafx1_ex[intrafx1_ex$intrafx1 == '1', 'intrafx1_fac'] = 'null'; intrafx1_ex[intrafx1_ex$intrafx1 == '10', 'intrafx1_fac'] = 'pos'; intrafx1_ex[intrafx1_ex$intrafx1 == '0.001', 'intrafx1_fac'] = 'neg'
+intrafx1_ex$intrafx1_fac = as.factor(intrafx1_ex$intrafx1_fac)
+intrafx1_ex['outcome_intrafx1'] = ifelse(intrafx1_ex$ratio_a0 < 1, 'decrease', 'increase'); intrafx1_ex[intrafx1_ex$ratio_a0 == 1, 'outcome_intrafx1'] = 'null'
+intrafx1_ex$outcome_intrafx1 = as.factor(intrafx1_ex$outcome_intrafx1)
+
+x2 = as.data.frame(t(unlist(kruskal.test(x = intrafx1_ex$ratio_a0, g = intrafx1_ex$intrafx1_fac))))[c(4,2:3)] # result of kruskal test
+
+# summarizing the stats of the quantitative analysis
+x1 = data.frame()
+for(i in unique(intrafx1_ex$intrafx1)) { x1 = rbind(x1,cbind(i,median(intrafx1_ex[intrafx1_ex$intrafx1 == i,'ratio_a0']),sd(intrafx1_ex[intrafx1_ex$intrafx1 == i,'ratio_a0']))) }
+colnames(x1) = c('intrafx1','median','standard deviation'); x1['subs'] = as.character(x1$intrafx1)
+dun = dunnTest(ratio_a0 ~ intrafx1_fac, data = intrafx1_ex, method = 'bonferroni')$res
+
+# adding results dunn post hoc test
+x3 = data.frame(cldList(comparison = dun$Comparison, p.value = dun$P.adj, threshold = 0.05))
+subs = data.frame(cond = c('neg','pos','null'), subs = c('0.001','10','1'))
+for (i in subs$cond) { x3[x3$Group == i,'subs'] = subs[subs$cond == i, 'subs']}
+tmp = data.frame(); for(i in x1$subs) { tmp = rbind(tmp, cbind(x1[x1$subs == i, c(1:3)], x3[x3$subs == i, 'Letter']))}
+colnames(tmp) = c('interaction value',colnames(tmp)[2:3],"Dunn's test*"); x1 = tmp; x1$`interaction value` = as.character(x1$`interaction value`);  x1 = x1[order(x1$`interaction value`),]
+
+x3 = data.frame('* groups displaying the same letter are not significantly different') # note for letter meaning
+
+# chi square test
+x4 = table(intrafx1_ex$intrafx1_fac, intrafx1_ex$outcome_intrafx1)
+x5 = chisq.test(x = x4, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)] 
+
+# Fisher pairwise Nominal Independence test
+res = pairwiseNominalIndependence(x = x4, fisher = T, gtest = F, chisq = T, correct = 'yates')
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame.matrix(x5$observed); for(i in rownames(x4)) { x4[i,'interaction value'] = subs[subs$cond == i, 'subs']}; x4 = x4[order(x4$`interaction value`),]
+x6 = as.data.frame(cldList(comparison = res$Comparison, p.value = res$p.adj.Fisher, threshold = .05))
+for(i in x6$Group) { x4[i, "Fisher's exact test pairwise Nominal Independence*"] = x6[x6$Group == i, 'Letter']}
+x4 = x4[,c('interaction value',colnames(x4)[colnames(x4) != 'interaction value'])]
+colnames(x1)[1] = colnames(x4)[1] = 'intracel. effect on X (αx)'
+
+# creating Supp.TableS4
+addWorksheet(wb, sheetName = "Supp.TableS4")
+writeData(wb, sheet = 4, x = x2, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 4, x = x1, startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 4, x = x7, startCol = (ncol(x1) + 2), startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 4, x = x4, startCol = (ncol(x1) + 2), startRow = (nrow(x7) + 2), borders = 'all')
+writeData(wb, sheet = 4, x = x3, startCol = 1, startRow = (nrow(x7) + 2 + nrow(x4) + 2), colNames = F)
+
+x2; x1; x7; x4; x3
+```
+
+### Can intrafx1 increase time to extinction relatively to alone?
+```{r}
+# creating figure 4 panel B
+p2 = ggplot(data = intrafx1_ex, mapping = aes(x = log10(alone), y = log10(X_XY), color = intrafx1)) + 
+  theme_classic() + labs(tag = 'B', color = expression('α'[X])) + geom_abline(slope = 1, intercept = 0) + geom_point(shape = 21, fill = NA, alpha = 3/4) +  
+  xlab('Y absent\nToE log10(hours)') + ylab('Y present\nToE log10(hours)') + theme(legend.title.align = 0.5) + scale_color_manual(values = my_palete[c(2,1,3)], name = bquote(atop('intracel. effect',paste('on X (',alpha[X],')'))))
+p2
+```
+
+```{r, paged.print=FALSE}
+intrafx1_ex['ratio_alone'] = intrafx1_ex$X_XY / intrafx1_ex$alone # ratio against absence of competitor
+
+# encoding variable as factor for further analyses
+intrafx1_ex['outcome_alone'] = ifelse(intrafx1_ex$ratio_alone < 1, 'decrease', 'increase'); intrafx1_ex[intrafx1_ex$ratio_alone == 1, 'outcome_alone'] = 'null'
+intrafx1_ex$outcome_alone = as.factor(intrafx1_ex$outcome_alone)
+
+x2 = as.data.frame(t(unlist(kruskal.test(x = intrafx1_ex$ratio_alone, g = intrafx1_ex$intrafx1_fac))))[c(4,2:3)] # result of kruskal test
+
+# summarizing the stats of the quantitative analysis
+x1 = data.frame()
+for(i in unique(intrafx1_ex$intrafx1)) { x1 = rbind(x1,cbind(i,median(intrafx1_ex[intrafx1_ex$intrafx1 == i,'ratio_alone']),sd(intrafx1_ex[intrafx1_ex$intrafx1 == i,'ratio_alone']))) }
+colnames(x1) = c('intrafx1','median','standard deviation'); x1['subs'] = as.character(x1$intrafx1)
+dun = dunnTest(ratio_alone ~ intrafx1_fac, data = intrafx1_ex, method = 'bonferroni')$res
+
+# adding results dunn post hoc test
+x3 = data.frame(cldList(comparison = dun$Comparison, p.value = dun$P.adj, threshold = 0.05))
+for (i in subs$cond) { x3[x3$Group == i,'subs'] = subs[subs$cond == i, 'subs']}
+tmp = data.frame(); for(i in x1$subs) { tmp = rbind(tmp, cbind(x1[x1$subs == i, c(1:3)], x3[x3$subs == i, 'Letter']))}
+colnames(tmp) = c('interaction value',colnames(tmp)[2:3],"Dunn's test*"); x1 = tmp; x1$`interaction value` = as.character(x1$`interaction value`);  x1 = x1[order(x1$`interaction value`),]
+
+x3 = data.frame('* groups displaying the same letter are not significantly different') # note for letter meaning
+
+# chi square test
+x4 = table(intrafx1_ex$intrafx1_fac, intrafx1_ex$outcome_alone)
+x5 = chisq.test(x = x4, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)] 
+
+# Fisher pairwise Nominal Independence test
+res = pairwiseNominalIndependence(x = x4, fisher = T, gtest = F, chisq = F, correct = 'yates')
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame.matrix(x5$observed); for(i in rownames(x4)) { x4[i,'interaction value'] = subs[subs$cond == i, 'subs']}; x4 = x4[order(x4$`interaction value`),]
+x6 = as.data.frame(cldList(comparison = res$Comparison, p.value = res$p.adj.Fisher, threshold = .05))
+for(i in x6$Group) { x4[i, "Fisher's exact test pairwise Nominal Independence*"] = x6[x6$Group == i, 'Letter']}
+x4 = x4[,c('interaction value',colnames(x4)[colnames(x4) != 'interaction value'])]
+colnames(x1)[1] = colnames(x4)[1] = 'intracel. effect on X (αX)'
+
+# creating Supp.TableS5
+addWorksheet(wb, sheetName = "Supp.TableS5")
+writeData(wb, sheet = 5, x = x2, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 5, x = x1, startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 5, x = x7, startCol = (ncol(x1) + 2), startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 5, x = x4, startCol = (ncol(x1) + 2), startRow = (nrow(x7) + 2), borders = 'all')
+writeData(wb, sheet = 5, x = x3, startCol = 1, startRow = (nrow(x7) + 2 + nrow(x4) + 2), colNames = F)
+
+x2; x1; x7; x4; x3
+```
+Significant kruskal wallis - intrafx1 < 0 and intrafx1 = 0 are not different, intrafx1 > 1 is different from the other groups.
+
+```{r}
+print('distribuition of conjugation efficiencies leading to increased time to extinction:')
+table(intrafx1_ex[intrafx1_ex$outcome_alone == 'increase','conjugation'])
+```
+
+### Control: solo with conjugation = -10
+
+```{r}
+ctrl_intrafx = ctrl_steady_0[ctrl_steady_0$conjugation == '1e-10',]; ctrl_intrafx$fitness = factor(ctrl_intrafx$fitness); ctrl_intrafx$conjugation = factor(ctrl_intrafx$conjugation)
+print(paste(nrow(ctrl_intrafx),'control single plasmids with conjugation of:', unique(ctrl_intrafx$conjugation)))
+print(paste('among these',nrow(ctrl_intrafx),'the plasmid persists in',nrow(ctrl_intrafx[ctrl_intrafx$X >= 1,]),'and goes extinct when:',paste(ctrl_intrafx[ctrl_intrafx$X < 1,'focal'], collapse = ' or '))) 
+```
+
+```{r, paged.print=FALSE}
+ctrl_intrafx['freqØ'] = ctrl_intrafx$O / (ctrl_intrafx$O + ctrl_intrafx$X)
+print(paste('Ø freq ranges between:', min(ctrl_intrafx[ctrl_intrafx$X >= 1, 'freqØ']), 'and', max(ctrl_intrafx[ctrl_intrafx$X >= 1, 'freqØ']),
+            'with an average of', mean(ctrl_intrafx[ctrl_intrafx$X >= 1, 'freqØ'])))
+```
+
+
+##    Case 4: the competitor plasmid as target of intracelular interactions on conjugation.
+```{r}
+# subsetting data for the case of intracellular conjugation effects --> Model 4: Intracellular interactions affecting conjugation: 3.4.2	Plasmid Y as the target of interactions
+intrafx2_ex = singles_extinction[singles_extinction$epistasis == '0' & singles_extinction$intrafx1 == '1' &
+                                   singles_extinction$interfx1 == '1' & singles_extinction$interfx2 == '1' & singles_extinction$lossxy == '1',]
+intrafx2_steady = singles_steady_0[singles_steady_0$epistasis == '0' & singles_steady_0$intrafx1 == '1' &
+                                     singles_steady_0$interfx1 == '1' & singles_steady_0$interfx2 == '1' & singles_steady_0$lossxy == '1',]
+# adding column with the conjugation from XY to these data sets
+intrafx2_steady['conj_X(Y)'] = as.numeric(as.character(intrafx2_steady$conjugation)) * as.numeric(as.character(intrafx2_steady$intrafx2))
+intrafx2_ex['conj_X(Y)'] = as.numeric(as.character(intrafx2_ex$conjugation)) * as.numeric(as.character(intrafx2_ex$intrafx2))
+```
+
+### Overview of plasmid maintenance
+```{r, paged.print=FALSE} 
+print(paste('out of', nrow(intrafx2_steady), 'cases, the focal plasmid does not go to extinction in', nrow(intrafx2_steady[intrafx2_steady$X >= 1 | intrafx2_steady$XY >= 1, ])))
+print('the intracelluar conjugation effects on Y are distributed as:'); table(intrafx2_steady$intrafx2)
+```
+X is always doomed to extinction.
+
+### How is the time to extinction affected by intrafx1?
+```{r}
+# creating figure 4 panel C
+p3 = ggplot(data = intrafx2_ex[intrafx2_ex$intrafx2 != '1',], mapping = aes(x = log10(no_interaction), y = log10(X_XY), color = intrafx2)) + 
+  theme_classic() + labs(tag = 'C', color = expression('α'[Y])) + geom_abline(slope = 1, intercept = 0) + geom_point(shape = 21, fill = NA, alpha = 3/4) +  
+  xlab(bquote(atop(alpha[Y]==1,'ToE log10(h)'))) + ylab(bquote(atop(alpha[Y]!=1,'ToE log10(h)'))) + theme(legend.title.align = 0.5) + scale_color_manual(values = my_palete[2:4], name = bquote(atop('intracel. effect',paste('on Y (',alpha[Y],')'))))
+p3
+```
+
+```{r, paged.print=FALSE}
+intrafx2_ex['ratio_a0'] = intrafx2_ex$X_XY / intrafx2_ex$no_interaction # ratio against no interaction
+
+# encoding variable as factor  for further analyses
+intrafx2_ex[intrafx2_ex$intrafx2 == '1', 'intrafx2_fac'] = 'null'; intrafx2_ex[intrafx2_ex$intrafx2 == '10', 'intrafx2_fac'] = 'pos'; intrafx2_ex[intrafx2_ex$intrafx2 == '0.001', 'intrafx2_fac'] = 'neg'
+intrafx2_ex$intrafx2_fac = as.factor(intrafx2_ex$intrafx2_fac)
+intrafx2_ex['outcome_intrafx2'] = ifelse(intrafx2_ex$ratio_a0 < 1, 'decrease', 'increase'); intrafx2_ex[intrafx2_ex$ratio_a0 == 1, 'outcome_intrafx2'] = 'null'
+intrafx2_ex$outcome_intrafx2 = as.factor(intrafx2_ex$outcome_intrafx2)
+
+x2 = as.data.frame(t(unlist(kruskal.test(x = intrafx2_ex$ratio_a0, g = intrafx2_ex$intrafx2_fac))))[c(4,2:3)] # result of kruskal test
+
+# summarizing the stats of the quantitative analysis
+x1 = data.frame()
+for(i in unique(intrafx2_ex$intrafx2)) { x1 = rbind(x1,cbind(i,median(intrafx2_ex[intrafx2_ex$intrafx2 == i,'ratio_a0']),sd(intrafx2_ex[intrafx2_ex$intrafx2 == i,'ratio_a0']))) }
+colnames(x1) = c('intrafx2','median','standard deviation'); x1['subs'] = as.character(x1$intrafx2)
+dun = dunnTest(ratio_a0 ~ intrafx2_fac, data = intrafx2_ex, method = 'bonferroni')$res
+
+# adding results dunn post hoc test
+x3 = data.frame(cldList(comparison = dun$Comparison, p.value = dun$P.adj, threshold = 0.05))
+subs = data.frame(cond = c('neg','pos','null'), subs = c('0.001','10','1'))
+for (i in subs$cond) { x3[x3$Group == i,'subs'] = subs[subs$cond == i, 'subs']}
+tmp = data.frame(); for(i in x1$subs) { tmp = rbind(tmp, cbind(x1[x1$subs == i, c(1:3)], x3[x3$subs == i, 'Letter']))}
+colnames(tmp) = c('interaction value',colnames(tmp)[2:3],"Dunn's test*"); x1 = tmp; x1$`interaction value` = as.character(x1$`interaction value`);  x1 = x1[order(x1$`interaction value`),]
+
+x3 = data.frame('* groups displaying the same letter are not significantly different') # note for letter meaning
+
+# chi square test
+x4 = table(intrafx2_ex$intrafx2_fac, intrafx2_ex$outcome_intrafx2)
+x5 = chisq.test(x = x4, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)] 
+
+# Fisher pairwise Nominal Independence test
+res = pairwiseNominalIndependence(x = x4, fisher = T, gtest = F, chisq = T, correct = 'yates')
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame.matrix(x5$observed); for(i in rownames(x4)) { x4[i,'interaction value'] = subs[subs$cond == i, 'subs']}; x4 = x4[order(x4$`interaction value`),]
+x6 = as.data.frame(cldList(comparison = res$Comparison, p.value = res$p.adj.Fisher, threshold = .05))
+for(i in x6$Group) { x4[i, "Fisher's exact test pairwise Nominal Independence*"] = x6[x6$Group == i, 'Letter']}
+x4 = x4[,c('interaction value',colnames(x4)[colnames(x4) != 'interaction value'])]
+colnames(x1)[1] = colnames(x4)[1] = 'intracel. effect on Y (αy)'
+
+# creating Supp.TableS6
+addWorksheet(wb, sheetName = "Supp.TableS6")
+writeData(wb, sheet = 6, x = x2, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 6, x = x1, startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 6, x = x7, startCol = (ncol(x1) + 2), startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 6, x = x4, startCol = (ncol(x1) + 2), startRow = (nrow(x7) + 2), borders = 'all')
+writeData(wb, sheet = 6, x = x3, startCol = 1, startRow = (nrow(x7) + 2 + nrow(x4) + 2), colNames = F)
+
+x2; x1; x7; x4; x3
+```
+
+### Can intrafx2 increase time to extinction relatively to alone?
+```{r}
+# creating figure 4 panel D
+p4 = ggplot(data = intrafx2_ex, mapping = aes(x = log10(alone), y = log10(X_XY), color = intrafx2)) + 
+  theme_classic() + labs(tag = 'D', color = expression('α'[Y])) + geom_abline(slope = 1, intercept = 0) + geom_point(shape = 21, fill = NA, alpha = 3/4) +  
+  xlab('Y absent\nToE log10(hours)') + ylab('Y present\nToE log10(hours)') + theme(legend.title.align = 0.5) + scale_color_manual(values = my_palete[c(2,1,3)], name = bquote(atop('intracel. effect',paste('on Y (',alpha[Y],')'))))
+p4
+```
+
+```{r, paged.print=FALSE}
+intrafx2_ex['ratio_alone'] = intrafx2_ex$X_XY / intrafx2_ex$alone # ratio against absence of competitor
+
+# encoding variable as factor for further analyses
+intrafx2_ex['outcome_alone'] = ifelse(intrafx2_ex$ratio_alone < 1, 'decrease', 'increase'); intrafx2_ex[intrafx2_ex$ratio_alone == 1, 'outcome_alone'] = 'null'
+intrafx2_ex$outcome_alone = as.factor(intrafx2_ex$outcome_alone)
+
+x2 = as.data.frame(t(unlist(kruskal.test(x = intrafx2_ex$ratio_alone, g = intrafx2_ex$intrafx2_fac))))[c(4,2:3)] # result of kruskal test
+
+# summarizing the stats of the quantitative analysis
+x1 = data.frame()
+for(i in unique(intrafx2_ex$intrafx2)) { x1 = rbind(x1,cbind(i,median(intrafx2_ex[intrafx2_ex$intrafx2 == i,'ratio_alone']),sd(intrafx2_ex[intrafx2_ex$intrafx2 == i,'ratio_alone']))) }
+colnames(x1) = c('intrafx2','median','standard deviation')
+colnames(x1) = c('interaction value',colnames(x1)[2:3]); x1$`interaction value` = as.character(x1$`interaction value`);  x1 = x1[order(x1$`interaction value`),]
+
+x3 = data.frame('* groups displaying the same letter are not significantly different') # note for letter meaning
+
+# chi square test
+x4 = table(intrafx2_ex$intrafx2_fac, intrafx2_ex$outcome_alone)
+x5 = chisq.test(x = x4, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)] 
+
+# Fisher pairwise Nominal Independence test
+res = pairwiseNominalIndependence(x = x4, fisher = T, gtest = F, chisq = F, correct = 'yates')
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame.matrix(x5$observed); for(i in rownames(x4)) { x4[i,'interaction value'] = subs[subs$cond == i, 'subs']}; x4 = x4[order(x4$`interaction value`),]
+x6 = as.data.frame(cldList(comparison = res$Comparison, p.value = res$p.adj.Fisher, threshold = .05))
+for(i in x6$Group) { x4[i, "Fisher's exact test pairwise Nominal Independence*"] = x6[x6$Group == i, 'Letter']}
+x4 = x4[,c('interaction value',colnames(x4)[colnames(x4) != 'interaction value'])]
+colnames(x1)[1] = colnames(x4)[1] = 'intracel. effect on Y (αy)'
+
+# creating Supp.TableS7
+addWorksheet(wb, sheetName = "Supp.TableS7")
+writeData(wb, sheet = 7, x = x2, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 7, x = x1, startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 7, x = x7, startCol = (ncol(x1) + 2), startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 7, x = x4, startCol = (ncol(x1) + 2), startRow = (nrow(x7) + 2), borders = 'all')
+writeData(wb, sheet = 7, x = x3, startCol = 1, startRow = (nrow(x7) + 2 + nrow(x4) + 2), colNames = F)
+
+x2; x1; x7; x4; x3
+```
+
+```{r}
+# assembling and exporting figure 4
+fig6 = p1 + p2 + p3 + p4 
+fig6
+ggsave(plot = fig6, filename = '/Users/jga039/Documents/simulations/analysis/figures_tables/fig_04.tiff', width = 210, height = 148, units = 'mm', dpi = 300)
+```
+
+
+##    Case 5: the focal plasmid as target of intercelular interactions on conjugation.
+```{r}
+# subsetting data for the case of intercellular conjugation effects --> 3.5	Model 5: Intercellular interactions affecting conjugation: 3.5.1 Plasmid X as the target of interactions
+interfx1_ex = singles_extinction[singles_extinction$epistasis == '0' & singles_extinction$intrafx1 == '1' &
+                                      singles_extinction$intrafx2 == '1' & singles_extinction$interfx2 == '1' & singles_extinction$lossxy == '1',]
+interfx1_steady = singles_steady_0[singles_steady_0$epistasis == '0' & singles_steady_0$intrafx1 == '1' &
+                                      singles_steady_0$intrafx2 == '1' & singles_steady_0$interfx2 == '1' & singles_steady_0$lossxy == '1',]
+# adding column with the conjugation from XY to these data sets
+interfx1_steady['conj_X(Y)'] = as.numeric(as.character(interfx1_steady$conjugation)) * as.numeric(as.character(interfx1_steady$interfx1))
+interfx1_ex['conj_X(Y)'] = as.numeric(as.character(interfx1_ex$conjugation)) * as.numeric(as.character(interfx1_ex$interfx1))
+```
+
+### Overview of plasmid maintenance
+```{r, paged.print=FALSE} 
+print(paste('out of', nrow(interfx1_steady), 'cases, the focal plasmid does not go to extinction in', nrow(interfx1_steady[interfx1_steady$X >= 1 | interfx1_steady$XY >= 1, ])))
+print('the intercelluar conjugation effects on X are distributed as:'); table(interfx1_steady$interfx1)
+```
+X is always doomed to extinction.
+
+### How is the time to extinction affected by interfx1?
+
+Comparisons by interfx1.
+```{r}
+# creating figure 5 panel A
+p1 = ggplot(data = interfx1_ex[interfx1_ex$interfx1 != '1',], mapping = aes(x = log10(no_interaction), y = log10(X_XY), color = interfx1)) + 
+  theme_classic() + labs(tag = 'A', color = expression(xi[X])) + geom_abline(slope = 1, intercept = 0) + geom_point(shape = 21, fill = NA, alpha = 3/4) +  
+  xlab(bquote(atop(xi[X]==1,'ToE log10(h)'))) + ylab(bquote(atop(xi[X]!=1,'ToE log10(h)'))) + theme(legend.title.align = 0.5) + scale_color_manual(values = my_palete[2:3], name = bquote(atop('intercel. effect',paste('on X (',xi[X],')'))))
+p1
+```
+
+```{r, paged.print=FALSE}
+interfx1_ex['ratio_e0'] = interfx1_ex$X_XY / interfx1_ex$no_interaction # ratio against no interaction
+
+# encoding variable as factor  for further analyses
+interfx1_ex[interfx1_ex$interfx1 == '1', 'interfx1_fac'] = 'null'; interfx1_ex[interfx1_ex$interfx1 == '10', 'interfx1_fac'] = 'pos'; interfx1_ex[interfx1_ex$interfx1 == '0.01', 'interfx1_fac'] = 'neg'
+interfx1_ex$interfx1_fac = as.factor(interfx1_ex$interfx1_fac)
+interfx1_ex['outcome_interfx1'] = ifelse(interfx1_ex$ratio_e0 < 1, 'decrease', 'increase'); interfx1_ex[interfx1_ex$ratio_e0 == 1, 'outcome_interfx1'] = 'null'
+interfx1_ex$outcome_interfx1 = as.factor(interfx1_ex$outcome_interfx1)
+
+x2 = as.data.frame(t(unlist(kruskal.test(x = interfx1_ex$ratio_e0, g = interfx1_ex$interfx1_fac))))[c(4,2:3)] # result of kruskal test
+
+# summarizing the stats of the quantitative analysis
+x1 = data.frame()
+for(i in unique(interfx1_ex$interfx1)) { x1 = rbind(x1,cbind(i,median(interfx1_ex[interfx1_ex$interfx1 == i,'ratio_e0']),sd(interfx1_ex[interfx1_ex$interfx1 == i,'ratio_e0']))) }
+colnames(x1) = c('interfx1','median','standard deviation'); x1['subs'] = as.character(x1$interfx1)
+dun = dunnTest(ratio_e0 ~ interfx1_fac, data = interfx1_ex, method = 'bonferroni')$res
+
+# adding results dunn post hoc test
+x3 = data.frame(cldList(comparison = dun$Comparison, p.value = dun$P.adj, threshold = 0.05))
+subs = data.frame(cond = c('neg','pos','null'), subs = c('0.01','10','1'))
+for (i in subs$cond) { x3[x3$Group == i,'subs'] = subs[subs$cond == i, 'subs']}
+tmp = data.frame(); for(i in x1$subs) { tmp = rbind(tmp, cbind(x1[x1$subs == i, c(1:3)], x3[x3$subs == i, 'Letter']))}
+colnames(tmp) = c('interaction value',colnames(tmp)[2:3],"Dunn's test*"); x1 = tmp; x1$`interaction value` = as.character(x1$`interaction value`);  x1 = x1[order(x1$`interaction value`),]
+
+x3 = data.frame('* groups displaying the same letter are not significantly different') # note for letter meaning
+
+# chi square test
+x4 = table(interfx1_ex$interfx1_fac, interfx1_ex$outcome_interfx1)
+x5 = chisq.test(x = x4, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)] 
+
+# Fisher pairwise Nominal Independence test
+res = pairwiseNominalIndependence(x = x4, fisher = T, gtest = F, chisq = T, correct = 'yates')
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame.matrix(x5$observed); for(i in rownames(x4)) { x4[i,'interaction value'] = subs[subs$cond == i, 'subs']}; x4 = x4[order(x4$`interaction value`),]
+x6 = as.data.frame(cldList(comparison = res$Comparison, p.value = res$p.adj.Fisher, threshold = .05))
+for(i in x6$Group) { x4[i, "Fisher's exact test pairwise Nominal Independence*"] = x6[x6$Group == i, 'Letter']}
+x4 = x4[,c('interaction value',colnames(x4)[colnames(x4) != 'interaction value'])]
+colnames(x1)[1] = colnames(x4)[1] = 'intercel. effect on X (ξx)'
+
+# creating Supp.TableS8
+addWorksheet(wb, sheetName = "Supp.TableS8")
+writeData(wb, sheet = 8, x = x2, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 8, x = x1, startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 8, x = x7, startCol = (ncol(x1) + 2), startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 8, x = x4, startCol = (ncol(x1) + 2), startRow = (nrow(x7) + 2), borders = 'all')
+writeData(wb, sheet = 8, x = x3, startCol = 1, startRow = (nrow(x7) + 2 + nrow(x4) + 2), colNames = F)
+
+x2; x1; x7; x4; x3
+```
+
+```{r}
+print('distribuition of conjugation efficiencies (among ξx == 10) not changing time to extinction:')
+table(interfx1_ex[interfx1_ex$outcome_interfx1 == 'null' & interfx1_ex$interfx1_fac == 'pos','conjugation'])
+```
+
+
+### Can interfx1 increase time to extinction relatively to alone?
+```{r}
+# creating figure 5 panel B
+p2 = ggplot(data = interfx1_ex, mapping = aes(x = log10(alone), y = log10(X_XY), color = interfx1)) + 
+  theme_classic() + labs(tag = 'B', color = expression(xi[X])) + geom_abline(slope = 1, intercept = 0) + geom_point(shape = 21, fill = NA, alpha = 3/4) +  
+  xlab('Y absent\nToE log10(hours)') + ylab('Y present\nToE log10(hours)') + theme(legend.title.align = 0.5) + scale_color_manual(values = my_palete[c(2,1,3)], name = bquote(atop('intercel. effect',paste('on X (',xi[X],')'))))
+p2
+```
+
+```{r, paged.print=FALSE}
+interfx1_ex['ratio_alone'] = interfx1_ex$X_XY / interfx1_ex$alone # ratio against absence of competitor
+
+# encoding variable as factor for further analyses
+interfx1_ex['outcome_alone'] = ifelse(interfx1_ex$ratio_alone < 1, 'decrease', 'increase'); interfx1_ex[interfx1_ex$ratio_alone == 1, 'outcome_alone'] = 'null'
+interfx1_ex$outcome_alone = as.factor(interfx1_ex$outcome_alone)
+
+x2 = as.data.frame(t(unlist(kruskal.test(x = interfx1_ex$ratio_alone, g = interfx1_ex$interfx1_fac))))[c(4,2:3)] # result of kruskal test
+
+# summarizing the stats of the quantitative analysis
+x1 = data.frame()
+for(i in unique(interfx1_ex$interfx1)) { x1 = rbind(x1,cbind(i,median(interfx1_ex[interfx1_ex$interfx1 == i,'ratio_alone']),sd(interfx1_ex[interfx1_ex$interfx1 == i,'ratio_alone']))) }
+colnames(x1) = c('interfx1','median','standard deviation'); x1['subs'] = as.character(x1$interfx1)
+dun = dunnTest(ratio_alone ~ interfx1_fac, data = interfx1_ex, method = 'bonferroni')$res
+
+# adding results dunn post hoc test
+x3 = data.frame(cldList(comparison = dun$Comparison, p.value = dun$P.adj, threshold = 0.05))
+for (i in subs$cond) { x3[x3$Group == i,'subs'] = subs[subs$cond == i, 'subs']}
+tmp = data.frame(); for(i in x1$subs) { tmp = rbind(tmp, cbind(x1[x1$subs == i, c(1:3)], x3[x3$subs == i, 'Letter']))}
+colnames(tmp) = c('interaction value',colnames(tmp)[2:3],"Dunn's test*"); x1 = tmp; x1$`interaction value` = as.character(x1$`interaction value`);  x1 = x1[order(x1$`interaction value`),]
+
+x3 = data.frame('* groups displaying the same letter are not significantly different') # note for letter meaning
+
+# chi square test
+x4 = table(interfx1_ex$interfx1_fac, interfx1_ex$outcome_alone)
+x5 = chisq.test(x = x4, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)] 
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame.matrix(x5$observed); for(i in rownames(x4)) { x4[i,'interaction value'] = subs[subs$cond == i, 'subs']}; x4 = x4[order(x4$`interaction value`),]
+x4 = x4[,c('interaction value',colnames(x4)[colnames(x4) != 'interaction value'])]
+colnames(x1)[1] = colnames(x4)[1] = 'intercel. effect on X (ξx)'
+
+# creating Supp.TableS3
+addWorksheet(wb, sheetName = "Supp.TableS9")
+writeData(wb, sheet = 9, x = x2, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 9, x = x1, startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 9, x = x7, startCol = (ncol(x1) + 2), startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 9, x = x4, startCol = (ncol(x1) + 2), startRow = (nrow(x7) + 2), borders = 'all')
+writeData(wb, sheet = 9, x = x3, startCol = 1, startRow = (nrow(x7) + 2 + nrow(x4) + 2), colNames = F)
+
+x2; x1; x7; x4; x3
+```
+Significant kruskal wallis - interfx1 < 0 and interfx1 = 0 are not different, interfx1 > 1 is different from the other groups. No dif with chisq.
+
+```{r, paged.print=F}
+print('distribuition of cases increasing time to extinction:')
+interfx1_ex[interfx1_ex$outcome_alone == 'increase',c('fitness','conjugation','loss','interfx1')]
+```
+
+
+##    Case 6: the competitor plasmid as target of intercelular interactions on conjugation.
+```{r}
+# subsetting data for the case of intracellular conjugation effects --> 3.5	Model 5: Intercellular interactions affecting conjugation: 3.5.e Plasmid Y as the target of interactions
+interfx2_ex = singles_extinction[singles_extinction$epistasis == '0' & singles_extinction$interfx1 == '1' &
+                                   singles_extinction$intrafx1 == '1' & singles_extinction$intrafx2 == '1' & singles_extinction$lossxy == '1',]
+interfx2_steady = singles_steady_0[singles_steady_0$epistasis == '0' & singles_steady_0$interfx1 == '1' &
+                                     singles_steady_0$intrafx1 == '1' & singles_steady_0$intrafx2 == '1' & singles_steady_0$lossxy == '1',]
+# adding column with the conjugation from XY to these data sets
+interfx2_steady['conj_X(Y)'] = as.numeric(as.character(interfx2_steady$conjugation)) * as.numeric(as.character(interfx2_steady$interfx2))
+interfx2_ex['conj_X(Y)'] = as.numeric(as.character(interfx2_ex$conjugation)) * as.numeric(as.character(interfx2_ex$interfx2))
+```
+
+### Overview of plasmid maintenance
+```{r, paged.print=FALSE} 
+print(paste('out of', nrow(interfx2_steady), 'cases, the focal plasmid does not go to extinction in', nrow(interfx2_steady[interfx2_steady$X >= 1 | interfx2_steady$XY >= 1, ])))
+print('the intracelluar conjugation effects on Y are distributed as:'); table(interfx2_steady$interfx2)
+```
+X is always doomed to extinction.
+
+### How is the time to extinction affected by interfx2?
+```{r}
+# creating figure 5 panel C
+p3 = ggplot(data = interfx2_ex[interfx2_ex$interfx2 != '1',], mapping = aes(x = log10(no_interaction), y = log10(X_XY), color = interfx2)) + 
+  theme_classic() + labs(tag = 'C', color = expression(xi[Y])) + geom_abline(slope = 1, intercept = 0) + geom_point(shape = 21, fill = NA, alpha = 3/4) +  
+  xlab(bquote(atop(xi[Y]==1,'ToE log10(h)'))) + ylab(bquote(atop(xi[Y]!=1,'ToE log10(h)'))) + theme(legend.title.align = 0.5) + scale_color_manual(values = my_palete[c(2:3)], name = bquote(atop('intercel. effect',paste('on Y (',xi[Y],')'))))
+p3
+```
+
+```{r, paged.print=FALSE}
+interfx2_ex['ratio_e0'] = interfx2_ex$X_XY / interfx2_ex$no_interaction # ratio against no interaction
+
+# encoding variable as factor  for further analyses
+interfx2_ex[interfx2_ex$interfx2 == '1', 'interfx2_fac'] = 'null'; interfx2_ex[interfx2_ex$interfx2 == '10', 'interfx2_fac'] = 'pos'; interfx2_ex[interfx2_ex$interfx2 == '0.01', 'interfx2_fac'] = 'neg'
+interfx2_ex$interfx2_fac = as.factor(interfx2_ex$interfx2_fac)
+interfx2_ex['outcome_interfx2'] = ifelse(interfx2_ex$ratio_e0 < 1, 'decrease', 'increase'); interfx2_ex[interfx2_ex$ratio_e0 == 1, 'outcome_interfx2'] = 'null'
+interfx2_ex$outcome_interfx2 = as.factor(interfx2_ex$outcome_interfx2)
+
+x2 = as.data.frame(t(unlist(kruskal.test(x = interfx2_ex$ratio_e0, g = interfx2_ex$interfx2_fac))))[c(4,2:3)] # result of kruskal test
+
+# summarizing the stats of the quantitative analysis
+x1 = data.frame()
+for(i in unique(interfx2_ex$interfx2)) { x1 = rbind(x1,cbind(i,median(interfx2_ex[interfx2_ex$interfx2 == i,'ratio_e0']),sd(interfx2_ex[interfx2_ex$interfx2 == i,'ratio_e0']))) }
+colnames(x1) = c('interfx2','median','standard deviation'); x1['subs'] = as.character(x1$interfx2)
+dun = dunnTest(ratio_e0 ~ interfx2_fac, data = interfx2_ex, method = 'bonferroni')$res
+
+# adding results dunn post hoc test
+x3 = data.frame(cldList(comparison = dun$Comparison, p.value = dun$P.adj, threshold = 0.05))
+subs = data.frame(cond = c('neg','pos','null'), subs = c('0.01','10','1'))
+for (i in subs$cond) { x3[x3$Group == i,'subs'] = subs[subs$cond == i, 'subs']}
+tmp = data.frame(); for(i in x1$subs) { tmp = rbind(tmp, cbind(x1[x1$subs == i, c(1:3)], x3[x3$subs == i, 'Letter']))}
+colnames(tmp) = c('interaction value',colnames(tmp)[2:3],"Dunn's test*"); x1 = tmp; x1$`interaction value` = as.character(x1$`interaction value`);  x1 = x1[order(x1$`interaction value`),]
+
+x3 = data.frame('* groups displaying the same letter are not significantly different') # note for letter meaning
+
+# chi square test
+x4 = table(interfx2_ex$interfx2_fac, interfx2_ex$outcome_interfx2)
+x5 = chisq.test(x = x4, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)] 
+
+# Fisher pairwise Nominal Independence test
+res = pairwiseNominalIndependence(x = x4, fisher = T, gtest = F, chisq = T, correct = 'yates')
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame.matrix(x5$observed); for(i in rownames(x4)) { x4[i,'interaction value'] = subs[subs$cond == i, 'subs']}; x4 = x4[order(x4$`interaction value`),]
+x6 = as.data.frame(cldList(comparison = res$Comparison, p.value = res$p.adj.Fisher, threshold = .05))
+for(i in x6$Group) { x4[i, "Fisher's exact test pairwise Nominal Independence*"] = x6[x6$Group == i, 'Letter']}
+x4 = x4[,c('interaction value',colnames(x4)[colnames(x4) != 'interaction value'])]
+colnames(x1)[1] = colnames(x4)[1] = 'intercel. effect on Y (ξy)' 
+
+# creating Supp.TableS10
+addWorksheet(wb, sheetName = "Supp.TableS10")
+writeData(wb, sheet = 10, x = x2, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 10, x = x1, startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 10, x = x7, startCol = (ncol(x1) + 2), startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 10, x = x4, startCol = (ncol(x1) + 2), startRow = (nrow(x7) + 2), borders = 'all')
+writeData(wb, sheet = 10, x = x3, startCol = 1, startRow = (nrow(x7) + 2 + nrow(x4) + 2), colNames = F)
+
+x2; x1; x7; x4; x3
+```
+
+
+### Can interfx2 increase time to extinction relatively to alone?
+```{r}
+# creating figure 5 panel D
+p4 = ggplot(data = interfx2_ex, mapping = aes(x = log10(alone), y = log10(X_XY), color = interfx2)) + 
+  theme_classic() + labs(tag = 'D', color = expression(xi[Y])) + geom_abline(slope = 1, intercept = 0) + geom_point(shape = 21, fill = NA, alpha = 3/4) +  
+  xlab('Y absent\nToE log10(hours)') + ylab('Y present\nToE log10(hours)') + theme(legend.title.align = 0.5) + scale_color_manual(values = my_palete[c(2,1,3)], name = bquote(atop('intercel. effect',paste('on Y (',xi[Y],')'))))
+p4
+```
+
+```{r, paged.print=FALSE}
+interfx2_ex['ratio_alone'] = interfx2_ex$X_XY / interfx2_ex$alone # ratio against absence of competitor
+
+# encoding variable as factor for further analyses
+interfx2_ex['outcome_alone'] = ifelse(interfx2_ex$ratio_alone < 1, 'decrease', 'increase'); interfx2_ex[interfx2_ex$ratio_alone == 1, 'outcome_alone'] = 'null'
+interfx2_ex$outcome_alone = as.factor(interfx2_ex$outcome_alone)
+
+x2 = as.data.frame(t(unlist(kruskal.test(x = interfx2_ex$ratio_alone, g = interfx2_ex$interfx2_fac))))[c(4,2:3)] # result of kruskal test
+
+# summarizing the stats of the quantitative analysis
+x1 = data.frame()
+for(i in unique(interfx2_ex$interfx2)) { x1 = rbind(x1,cbind(i,median(interfx2_ex[interfx2_ex$interfx2 == i,'ratio_alone']),sd(interfx2_ex[interfx2_ex$interfx2 == i,'ratio_alone']))) }
+colnames(x1) = c('interfx2','median','standard deviation'); x1['subs'] = as.character(x1$interfx2)
+dun = dunnTest(ratio_alone ~ interfx2_fac, data = interfx2_ex, method = 'bonferroni')$res
+
+# adding results dunn post hoc test
+x3 = data.frame(cldList(comparison = dun$Comparison, p.value = dun$P.adj, threshold = 0.05))
+for (i in subs$cond) { x3[x3$Group == i,'subs'] = subs[subs$cond == i, 'subs']}
+tmp = data.frame(); for(i in x1$subs) { tmp = rbind(tmp, cbind(x1[x1$subs == i, c(1:3)], x3[x3$subs == i, 'Letter']))}
+colnames(tmp) = c('interaction value',colnames(tmp)[2:3],"Dunn's test*"); x1 = tmp; x1$`interaction value` = as.character(x1$`interaction value`);  x1 = x1[order(x1$`interaction value`),]
+
+x3 = data.frame('* groups displaying the same letter are not significantly different') # note for letter meaning
+
+# chi square test
+x4 = table(interfx2_ex$interfx2_fac, interfx2_ex$outcome_alone)
+x5 = chisq.test(x = x4, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)] 
+
+# Fisher pairwise Nominal Independence test
+res = pairwiseNominalIndependence(x = x4, fisher = T, gtest = F, chisq = F, correct = 'yates')
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame.matrix(x5$observed); for(i in rownames(x4)) { x4[i,'interaction value'] = subs[subs$cond == i, 'subs']}; x4 = x4[order(x4$`interaction value`),]
+x6 = as.data.frame(cldList(comparison = res$Comparison, p.value = res$p.adj.Fisher, threshold = .05))
+for(i in x6$Group) { x4[i, "Fisher's exact test pairwise Nominal Independence*"] = x6[x6$Group == i, 'Letter']}
+x4 = x4[,c('interaction value',colnames(x4)[colnames(x4) != 'interaction value'])]
+colnames(x1)[1] = colnames(x4)[1] = 'intercel. effect on Y (ξy)'
+
+# creating Supp.TableS11
+addWorksheet(wb, sheetName = "Supp.TableS11")
+writeData(wb, sheet = 11, x = x2, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 11, x = x1, startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 11, x = x7, startCol = (ncol(x1) + 2), startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 11, x = x4, startCol = (ncol(x1) + 2), startRow = (nrow(x7) + 2), borders = 'all')
+writeData(wb, sheet = 11, x = x3, startCol = 1, startRow = (nrow(x7) + 2 + nrow(x4) + 2), colNames = F)
+
+x2; x1; x7; x4; x3
+```
+
+```{r, paged.print=F}
+print('distribuition of Y`s conjugation increasing time to extinction:')
+table(interfx2_ex[interfx2_ex$outcome_alone == 'increase','conjugation2'])
+```
+
+```{r}
+# assembling and exporting figure 5
+fig7 = p1 + p2 + p3 + p4
+fig7
+ggsave(plot = fig7, filename = '/Users/jga039/Documents/simulations/analysis/figures_tables/fig_05.tiff', width = 210, height = 148, units = 'mm', dpi = 300)
+```
+
+
+##    Case 7: the plasmids interfere in segregational loss
+
+```{r}
+# subsetting data for the case of intracellular conjugation effects --> Model 6: Interactions affecting Loss
+loss_ex = singles_extinction[singles_extinction$epistasis == '0' & singles_extinction$intrafx1 == '1' & singles_extinction$intrafx2 == '1' &
+                             singles_extinction$interfx1 == '1' & singles_extinction$interfx2 == '1',]
+loss_steady = singles_steady_0[singles_steady_0$epistasis == '0' & singles_steady_0$intrafx1 == '1' & singles_steady_0$intrafx2 == '1' &
+                                 singles_steady_0$interfx1 == '1' & singles_steady_0$interfx2 == '1',]
+# adding column with the loss from XY to these data sets
+loss_steady['loss2'] = as.numeric(as.character(loss_steady$loss)) * as.numeric(as.character(loss_steady$lossxy))
+loss_ex['loss2'] = as.numeric(as.character(loss_ex$loss)) * as.numeric(as.character(loss_ex$lossxy))
+```
+
+### Overview of plasmid maintenance
+```{r, paged.print=FALSE} 
+print(paste('out of', nrow(loss_steady), 'cases, the focal plasmid does not go to extinction in', nrow(loss_steady[loss_steady$X >= 1 | loss_steady$XY >= 1, ])))
+print('the loss effects are distributed as:'); table(loss_steady$lossxy)
+```
+X is always doomed to extinction.
+
+### How is the time to extinction affected by lossxy?
+```{r}
+# creating figure 6 panel A
+p1 = ggplot(data = loss_ex[loss_ex$lossxy != '1',], mapping = aes(x = log10(no_interaction), y = log10(X_XY), color = lossxy)) + 
+  theme_classic() + labs(tag = 'A', color = expression(sigma)) + geom_abline(slope = 1, intercept = 0) + geom_point(shape = 21, fill = NA, alpha = 3/4) +  
+  xlab(bquote(atop(sigma==1,'ToE log10(h)'))) + ylab(bquote(atop(sigma!=1,'ToE log10(h)'))) + theme(legend.title.align = 0.5) + scale_color_manual(values = my_palete[2], name = bquote(atop('effect on loss',paste('(',sigma,')'))))
+p1
+```
+
+```{r, paged.print=FALSE}
+loss_ex['ratio_e0'] = loss_ex$X_XY / loss_ex$no_interaction # ratio against no interaction
+
+# encoding variable as factor  for further analyses
+loss_ex['loss_fac'] = ifelse(test = loss_ex$lossxy == '1', yes = 'null', no = 'fx'); loss_ex$loss_fac = as.factor(loss_ex$loss_fac)
+loss_ex['outcome_loss'] = ifelse(loss_ex$ratio_e0 < 1, 'decrease', 'increase'); loss_ex[loss_ex$ratio_e0 == 1, 'outcome_loss'] = 'null'
+loss_ex$outcome_loss = as.factor(loss_ex$outcome_loss)
+
+x2 = as.data.frame(t(unlist(wilcox.test(x = loss_ex[loss_ex$loss_fac == 'fx', 'ratio_e0'], mu = 1, correct = T))))[c(5:4,2)] # result of wilcox test
+
+# summarizing the stats of the quantitative analysis
+x1 = data.frame()
+for(i in unique(loss_ex$lossxy)) { x1 = rbind(x1,cbind(i,median(loss_ex[loss_ex$lossxy == i,'ratio_e0']),sd(loss_ex[loss_ex$lossxy == i,'ratio_e0']))) }
+colnames(x1) = c('lossxy','median','standard deviation'); x1['subs'] = as.character(x1$lossxy)
+colnames(x1) = c('interaction value',colnames(x1)[2:3]); x1$`interaction value` = as.character(x1$`interaction value`);  x1 = x1[order(x1$`interaction value`),]
+subs = data.frame(cond = c('null','fx'), subs = c('1','10'))
+
+# chi square test
+x4 = table(loss_ex$loss_fac, loss_ex$outcome_loss)
+x5 = chisq.test(x = x4, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)] 
+
+# Fisher pairwise Nominal Independence test
+res = pairwiseNominalIndependence(x = x4, fisher = T, gtest = F, chisq = T, correct = 'yates')
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame.matrix(x5$observed); for(i in rownames(x4)) { x4[i,'interaction value'] = subs[subs$cond == i, 'subs']}; x4 = x4[order(x4$`interaction value`),]
+x4 = x4[,c('interaction value',colnames(x4)[colnames(x4) != 'interaction value'])]
+colnames(x1)[1] = colnames(x4)[1] = 'effect on loss (σ)'
+
+# creating Supp.TableS12
+addWorksheet(wb, sheetName = "Supp.TableS12")
+writeData(wb, sheet = 12, x = x2, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 12, x = x1[,1:(ncol(x1)-1)], startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 12, x = x7, startCol = (ncol(x1) + 2), startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 12, x = x4, startCol = (ncol(x1) + 2), startRow = (nrow(x7) + 2), borders = 'all')
+
+x2; x1[,1:(ncol(x1)-1)]; x7; x4
+```
+There is a significant difference between groups but the effect is very small.
+
+```{r, paged.print=F}
+print('distribuition of cases decreasing time to extinction:')
+table(loss_ex[loss_ex$outcome_loss == 'decrease',c('fitness2','loss','loss_fac')])
+```
+
+
+### Can loss effect increase time to extinction relatively to alone?
+```{r}
+# creating figure 6 panel B
+p2 = ggplot(data = loss_ex, mapping = aes(x = log10(alone), y = log10(X_XY), color = lossxy)) + 
+  theme_classic() + labs(tag = 'B', color = expression(sigma)) + geom_abline(slope = 1, intercept = 0) + geom_point(shape = 21, fill = NA, alpha = 3/4) +  
+  xlab('Y absent\nToE log10(hours)') + ylab('Y present\nToE log10(hours)') + theme(legend.title.align = 0.5) + scale_color_manual(values = my_palete[c(1:2)], name = bquote(atop('effect on loss',paste('(',sigma,')'))))
+p2
+```
+
+```{r, paged.print=FALSE}
+loss_ex['ratio_alone'] = loss_ex$X_XY / loss_ex$alone # ratio against absence of competitor
+
+# encoding variable as factor for further analyses
+loss_ex['outcome_alone'] = ifelse(loss_ex$ratio_alone < 1, 'decrease', 'increase'); loss_ex[loss_ex$ratio_alone == 1, 'outcome_alone'] = 'null'
+loss_ex$outcome_alone = as.factor(loss_ex$outcome_alone)
+
+x2 = as.data.frame(t(unlist(wilcox.test(x = loss_ex[loss_ex$loss_fac == 'fx', 'ratio_alone'], mu = 1, correct = T))))[c(5:4,2)] # result of wilcox test
+
+# summarizing the stats of the quantitative analysis
+x1 = data.frame()
+for(i in unique(loss_ex$lossxy)) { x1 = rbind(x1,cbind(i,median(loss_ex[loss_ex$lossxy == i,'ratio_alone']),sd(loss_ex[loss_ex$lossxy == i,'ratio_alone']))) }
+colnames(x1) = c('lossxy','median','standard deviation'); x1['subs'] = as.character(x1$lossxy); colnames(x1)[1] = 'interaction value'
+
+# chi square test
+x4 = table(loss_ex$loss_fac, loss_ex$outcome_alone)
+x5 = chisq.test(x = x4, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)] 
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame(as.matrix(x5$observed)); x4['interaction value'] = subs$subs; x4 = x4[,c(2:1)]; colnames(x4)[2] = 'decrease'
+colnames(x1)[1] = colnames(x4)[1] = 'effect on loss (σ)'
+
+# creating Supp.TableS3
+addWorksheet(wb, sheetName = "Supp.TableS13")
+writeData(wb, sheet = 13, x = x2, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 13, x = x1[,1:(ncol(x1)-1)], startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 13, x = x7, startCol = (ncol(x1) + 2), startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 13, x = x4, startCol = (ncol(x1) + 2), startRow = (nrow(x7) + 2), borders = 'all')
+
+x2; x1[,1:(ncol(x1)-1)]; x7; x4
+```
+
+```{r}
+# assembling and exporting figure 6
+fig8 = p1 + p2 
+fig8
+ggsave(plot = fig8, filename = '/Users/jga039/Documents/simulations/analysis/figures_tables/fig_06.tiff', width = 210, height = 148/2, units = 'mm', dpi = 300)
+```
+
+
+## Multiple effects analysis
+### checking the contribution of the different interaction variables in singular models.
+
+```{r}
+# subsetting [cases of exctintion] to exclude the cases of "no interactions"  --> 3.7 Multiple interactions
+only_interactions = singles_extinction[!(singles_extinction$epistasis == '0' & singles_extinction$intrafx1 == '1' & singles_extinction$interfx1 == '1' &
+                                      singles_extinction$intrafx2 == '1' & singles_extinction$interfx2 == '1' & singles_extinction$lossxy == '1'),]
+
+# subsetting [steady state, i.e. stable plasmids] to exclude the cases of "no interactions"  --> 3.7 Multiple interactions
+only_interactions_steady = singles_steady_0[!(singles_steady_0$epistasis == '0' & singles_steady_0$intrafx1 == '1' & singles_steady_0$interfx1 == '1' &
+                                      singles_steady_0$intrafx2 == '1' & singles_steady_0$interfx2 == '1' & singles_steady_0$lossxy == '1'),]
+only_interactions_steady = only_interactions_steady[only_interactions_steady$X >= 1 | only_interactions_steady$XY >= 1,] # only cases where there is no exctinction
+```
+
+```{r}
+print(paste('from a total of', (nrow(only_interactions) + nrow(only_interactions_steady)), 'cases, there is extinction for', nrow(only_interactions), 'cases, while in', nrow(only_interactions_steady), 'cases the plasmids are stable.'))
+```
+
+```{r}
+only_interactions['ratio_alone'] = only_interactions$X_XY / only_interactions$alone  # ratio against absence of competitor
+
+# encoding variable as factor for further analyses
+only_interactions['out_alone'] = ifelse(test = only_interactions$ratio_alone > 1, yes = 'increase', no = 'decrease'); only_interactions[only_interactions$ratio_alone == 1, 'out_alone'] = 'null'
+table(only_interactions$out_alone)
+only_interactions[only_interactions$out_alone %in% c('decrease','null'),'out_alone'] = 'decrease/no effect'; table(only_interactions$out_alone)
+```
+
+```{r, paged.print=FALSE}
+# reshaping the data for further analysis
+tmp = only_interactions[, c('epistasis','intrafx1','interfx1','intrafx2','interfx2','lossxy','out_alone')]
+colnames(tmp) = c('ε','αx','ξx','αy','ξy','σ','out_alone')
+tmp = melt(data = tmp, id.vars = 'out_alone')
+tmp = tmp[ !((tmp$variable == 'ε' & tmp$value == '0') | (tmp$variable %in% c('αx','ξx','αy','ξy','σ') & tmp$value == '1')) ,]
+tmp2 = table(tmp$variable, tmp$out_alone)
+
+x3 = data.frame('* groups displaying the same letter are not significantly different')  # note for letter meaning
+
+# chi square test
+x5 = chisq.test(x = tmp2, correct = T); x7 = as.data.frame(t(unlist(x5)))[c(4,2:3)]
+
+# Fisher pairwise Nominal Independence test
+res = pairwiseNominalIndependence(x = tmp2, fisher = T, gtest = F, chisq = T, correct = 'yates')
+
+# summarizing the stats of the qualitative analyses
+x4 = as.data.frame.matrix(x5$observed); x4['interaction'] = rownames(x4)
+x6 = as.data.frame(cldList(comparison = res$Comparison, p.value = res$p.adj.Fisher, threshold = .05))
+for(i in x6$Group) { x4[i, "Fisher's exact test pairwise Nominal Independence*"] = x6[x6$Group == i, 'Letter']}
+x4 = x4[,c('interaction',colnames(x4)[colnames(x4) != 'interaction'])]
+x4['interaction_full_name'] = c('epistasis', 'intracellular interaction affecting conjugation of X', 'intercellular interaction affecting conjugation of X', 'intracellular interaction affecting conjugation of Y', 'intercellular interaction affecting conjugation of Y', 'interaction affecting loss')
+
+# creating Supp.TableS14
+addWorksheet(wb, sheetName = "Supp.TableS14")
+writeData(wb, sheet = 14, x = x7, startCol = 1, startRow = 1, borders = 'surrounding')
+writeData(wb, sheet = 14, x = x4, startCol = 1, startRow = (nrow(x2) + 2), borders = 'all')
+writeData(wb, sheet = 14, x = x3, startCol = 1, startRow = (nrow(x7) + nrow(x4) + 3), colNames = F)
+
+x7; x4; x3
+```
+
+```{r}
+# reshaping data for plotting
+tmp = only_interactions[, c('ratio_alone','epistasis','intrafx1','interfx1','intrafx2','interfx2','lossxy','out_alone')]
+tmp = melt(data = tmp, id.vars = c('ratio_alone','out_alone'))
+tmp = tmp[ !((tmp$variable == 'epistasis' & tmp$value == '0') | (tmp$variable %in% c('intrafx1','interfx1','intrafx2','interfx2','lossxy') & tmp$value == '1')) ,]
+tmp[tmp$variable == 'epistasis','var'] = 'epsilon'; tmp[tmp$variable == 'lossxy','var'] = 'sigma'
+tmp[tmp$variable == 'intrafx1','var'] = 'alpha[X]'; tmp[tmp$variable == 'intrafx2','var'] = 'alpha[Y]'; tmp[tmp$variable == 'interfx1','var'] = 'xi[X]'; tmp[tmp$variable == 'interfx2','var'] = 'xi[Y]'
+```
+
+
+```{r}
+# creating figure 7 panel A
+p1 = ggplot(data = tmp[tmp$variable == 'epistasis',], mapping = aes(x = value, y = ratio_alone, color = out_alone)) + 
+  theme_classic() + labs(tag = 'A') + geom_point(position = 'jitter', shape = 21, fill = NA, alpha = 3/4) + facet_grid(.~var, scales = 'free', labeller = label_parsed) + 
+  xlab('') + ylab('Y present / Y absent\nlog10(hours)') + theme(strip.text = element_text(size = 11)) + scale_color_manual(values = my_palete[c(2:3)], name = '')
+
+# creating figure 7 panel B
+p2 = ggplot(data = tmp[tmp$variable != 'epistasis',], mapping = aes(x = value, y = ratio_alone, color = out_alone)) + 
+  theme_classic() + labs(tag = 'B') + geom_point(position = 'jitter', shape = 21, fill = NA, alpha = 3/4) + facet_grid(.~var, scales = 'free', labeller = label_parsed) + theme(axis.text.x = element_text(angle = 90)) + 
+  xlab('') + ylab('Y present / Y absent\nlog10(hours)') + theme(strip.text = element_text(size = 10)) + scale_color_manual(values = my_palete[c(2:3)], name = '')
+```
+
+```{r}
+# assembling and exporting figure 7
+p4 = ggarrange(p1, p2, ncol = 2, nrow = 1, common.legend = T, legend = 'bottom')
+fig9 = p4 
+ggsave(plot = fig9, filename = '/Users/jga039/Documents/simulations/analysis/figures_tables/fig_07.tiff', width = 148, height = 210/2, units = 'mm', dpi = 300)
+```
+
+```{r}
+fig9
+```
+
+```{r}
+print('interactions allowing survival:')
+only_interactions_steady['outcome'] = 'survived'
+tmp = only_interactions_steady[, c('epistasis','intrafx1','interfx1','intrafx2','interfx2','lossxy','outcome')]
+tmp = melt(data = tmp, id.vars = 'outcome')
+tmp = tmp[ !((tmp$variable == 'epistasis' & tmp$value == '0') | (tmp$variable %in% c('intrafx1','interfx1','intrafx2','interfx2','lossxy') & tmp$value == '1')) ,]
+table(tmp$variable, tmp$outcome)
+```
+
+#### Importing the fixed competitor simulation output files
+```{r}
+# (i.e multiple interactions may occur, but the competitor plasmid is always the same)
+
+# steady state data
+fixed_steady_0 = read.table(file = '/Users/jga039/Documents/simulations/final_data/gama_steady_state_singles_fixed_competitor_REVIEW.txt')
+fixed_steady_0['focal'] = apply(X = as.matrix(fixed_steady_0$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[1], split = '_'))[c(1,4,6)], collapse = '_') } )
+fixed_steady_0['competitor'] = apply(X = as.matrix(fixed_steady_0$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[2], split = '_'))[c(1,4,6)], collapse = '_') } )
+fixed_steady_0['competitor2'] = apply(X = as.matrix(fixed_steady_0$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[2], split = '_'))[c(1,4)], collapse = '_') } )
+fixed_steady_0['loss'] = as.factor(apply(X = as.matrix(fixed_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[12] } ))
+fixed_steady_0['epistasis'] = as.factor(apply(X = as.matrix(fixed_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[11] } ))
+fixed_steady_0['intrafx1'] = as.factor(apply(X = as.matrix(fixed_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[2] } ))
+fixed_steady_0['interfx1'] = as.factor(apply(X = as.matrix(fixed_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[3] } ))
+fixed_steady_0['intrafx2'] = as.factor(apply(X = as.matrix(fixed_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[8] } ))
+fixed_steady_0['interfx2'] = as.factor(apply(X = as.matrix(fixed_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[9] } ))
+fixed_steady_0['lossxy'] = as.factor(apply(X = as.matrix(fixed_steady_0$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[13] } ))
+fixed_steady_0['fitness'] = as.factor(apply(X = as.matrix(fixed_steady_0$focal), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[2]) }))
+fixed_steady_0['conjugation'] = as.factor(apply(X = as.matrix(fixed_steady_0$focal), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[1]) }))
+fixed_steady_0['fitness2'] = as.factor(apply(X = as.matrix(fixed_steady_0$competitor), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[2]) }))
+fixed_steady_0['conjugation2'] = as.factor(apply(X = as.matrix(fixed_steady_0$competitor), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[1]) }))
+
+# time to extinction data
+fixed_extinction = read.table(file = '/Users/jga039/Documents/simulations/final_data/gama_time_to_extinction_singles_fixed_competitor_REVIEW.txt')
+fixed_extinction['focal'] = apply(X = as.matrix(fixed_extinction$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[1], split = '_'))[c(1,4,6)], collapse = '_') } )
+fixed_extinction['competitor'] = apply(X = as.matrix(fixed_extinction$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[2], split = '_'))[c(1,4,6)], collapse = '_') } )
+fixed_extinction['competitor2'] = apply(X = as.matrix(fixed_extinction$ID), MARGIN = 1, FUN = function(x){
+  paste(unlist(strsplit(x = unlist(strsplit(x = as.character(x), split = ':'))[2], split = '_'))[c(1,4)], collapse = '_') } )
+fixed_extinction['loss'] = as.factor(apply(X = as.matrix(fixed_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[12] } ))
+fixed_extinction['epistasis'] = as.factor(apply(X = as.matrix(fixed_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[11] } ))
+fixed_extinction['intrafx1'] = as.factor(apply(X = as.matrix(fixed_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[2] } ))
+fixed_extinction['interfx1'] = as.factor(apply(X = as.matrix(fixed_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[3] } ))
+fixed_extinction['intrafx2'] = as.factor(apply(X = as.matrix(fixed_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[8] } ))
+fixed_extinction['interfx2'] = as.factor(apply(X = as.matrix(fixed_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[9] } ))
+fixed_extinction['lossxy'] = as.factor(apply(X = as.matrix(fixed_extinction$ID), MARGIN = 1, FUN = function(x){ unlist(strsplit(x = as.character(x), split = '_'))[13] } ))
+fixed_extinction['fitness'] = as.factor(apply(X = as.matrix(fixed_extinction$focal), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[2]) }))
+fixed_extinction['conjugation'] = as.factor(apply(X = as.matrix(fixed_extinction$focal), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[1]) }))
+fixed_extinction['fitness2'] = as.factor(apply(X = as.matrix(fixed_extinction$competitor), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[2]) }))
+fixed_extinction['conjugation2'] = as.factor(apply(X = as.matrix(fixed_extinction$competitor), MARGIN = 1, FUN = function(x) { as.numeric(unlist(strsplit(x = x, split = '_'))[1]) }))
+fixed_extinction['alone'] = apply(X = as.matrix(fixed_extinction$focal), MARGIN = 1, FUN = function(x) { solo_extinction[solo_extinction$focal == x, 'X']})
+fixed_extinction['no_interaction'] = apply(X = fixed_extinction, MARGIN = 1, FUN = function(x) { 
+  fixed_extinction[ fixed_extinction$focal == x['focal'] & fixed_extinction$competitor == x['competitor'] &
+                 fixed_extinction$epistasis == '0' & fixed_extinction$intrafx1 == '1' & fixed_extinction$interfx1 == '1' &
+                 fixed_extinction$intrafx2 == '1' & fixed_extinction$interfx2 == '1' & fixed_extinction$lossxy == '1', 'X_XY']})
+```
+
+
+### checking the contribution of the different interaction variables in multiple-interaction models.
+
+```{r}
+fixed_steady = fixed_steady_0[fixed_steady_0$X >= 1 | fixed_steady_0$XY >= 1, ]
+print(paste('X does not go to extinction in', nrow(fixed_steady), 'out of', nrow(fixed_steady_0), 'thus in', round(100 * nrow(fixed_steady) / nrow(fixed_steady_0), digits = 2), '% and X only cells are present in', nrow(fixed_steady[fixed_steady$X >= 1,]), 'and XY cells are present in', nrow(fixed_steady[fixed_steady$XY >= 1,])))
+
+print(paste('among these', nrow(fixed_steady), 'Y is present in', nrow(fixed_steady[fixed_steady$Y >= 1,]), 'and XY is present in', nrow(fixed_steady[fixed_steady$XY >= 1,])))
+
+print(paste('Y does not go to extinction in', nrow(fixed_steady_0[fixed_steady_0$Y >= 1 & fixed_steady_0$X < 1,]), 'of the cases where X gets extinct, and XY does not got to extinction in', nrow(fixed_steady_0[fixed_steady_0$XY >= 1 & fixed_steady_0$X < 1,]), 'of the same subset.'))
+
+print(paste('X does not go to extinction in', nrow(solo_steady_0[solo_steady_0$X >= 1,]), 'when alone.'))
+
+fixed_steady['fit_XY'] = as.numeric(as.character(fixed_steady$fitness)) * as.numeric(as.character(fixed_steady$fitness2)) + as.numeric(as.character(fixed_steady$epistasis))
+print(paste('number of cases where fit X > fit XY:',nrow(fixed_steady[as.numeric(as.character(fixed_steady$fitness)) > as.numeric(as.character(fixed_steady$fit_XY)),])))
+```
+Thus in 291 cases out of 23328 X does not go extinct. These are exactly the same cases where Y and XY can persist.
+
+```{r}
+print('distribution of cases of survival per variable:')
+fixed_steady_0['survival'] = ifelse(test = fixed_steady_0$X >= 1 | fixed_steady_0$XY >= 1, yes = 'survival', no = 'extinction')
+list(fitness_distribution = table(fixed_steady_0$fitness, fixed_steady_0$survival), conjugation_distribution = table(fixed_steady_0$conjugation, fixed_steady_0$survival),
+     loss_distribution = table(fixed_steady_0$loss, fixed_steady_0$survival), epistasis_distribution = table(fixed_steady_0$epistasis, fixed_steady_0$survival),
+     intrafx1_distribution = table(fixed_steady_0$intrafx1, fixed_steady_0$survival), intrafx2_distribution = table(fixed_steady_0$intrafx2, fixed_steady_0$survival),
+     interfx1_distribution = table(fixed_steady_0$interfx1, fixed_steady_0$survival), interfx2_distribution = table(fixed_steady_0$interfx2, fixed_steady_0$survival),
+     lossXY_distribution = table(fixed_steady_0$lossxy, fixed_steady_0$survival))
+```
+
+Thus all surviving X plasmids have conjugation of 1e-11, epistasis of 0.1 and facilitation (intrafx1 = 10) and fitness > .85.
+
+```{r}
+print(paste('plasmid-free cells go to extinction in',nrow(fixed_steady[fixed_steady$O < 1,]), 'cases out of',nrow(fixed_steady)))
+tmp = fixed_steady; tmp['plasmid_free'] = ifelse(test = tmp$O >= 1, yes = 'yes', no = 'no'); tmp$O = ifelse(test = tmp$O >= 1, yes = tmp$O, no = 0)
+tmp['dom'] = ifelse(test = tmp$XY > tmp$X, yes = 'XY', no = 'X')
+tmp['total'] = tmp$O + tmp$X + tmp$Y + tmp$XY; tmp['freqX'] = 100 * (tmp$X / tmp$total); tmp['freqXY'] = 100 * (tmp$XY / tmp$total); tmp['freqY'] = 100 * (tmp$Y / tmp$total)
+print(paste('the maximum frequency Y cells can attain is',max(tmp$freqY)))
+```
+
+```{r}
+print('distribution of presence of plasmid-free cells per value of loss:'); table(tmp$plasmid_free,tmp$loss)
+```
+Plasmid-free cells wont be present when loss = -8.
+
+
+### Cases that go to extinction
+```{r}
+fixed_extinction['ratio_alone'] = fixed_extinction$X_XY / fixed_extinction$alone  # ratio against absence of competitor
+
+# encoding variable as factor for further analyses
+fixed_extinction['out_alone'] = ifelse(test = fixed_extinction$ratio_alone > 1, yes = 'increase', no = 'decrease'); fixed_extinction[fixed_extinction$ratio_alone == 1, 'out_alone'] = 'null'
+
+# displaying the distribution
+table(fixed_extinction$out_alone)
+fixed_extinction[fixed_extinction$out_alone %in% c('decrease','null'),'out_alone'] = 'decrease_null'; table(fixed_extinction$out_alone)
+```
+
+```{r}
+print('checking if any of the variables alone can explain the results')
+list(fitness_distribution = table(fixed_extinction$fitness, fixed_extinction$out_alone), conjugation_distribution = table(fixed_extinction$conjugation, fixed_extinction$out_alone),
+     loss_distribution = table(fixed_extinction$loss, fixed_extinction$out_alone), epistasis_distribution = table(fixed_extinction$epistasis, fixed_extinction$out_alone),
+     intrafx1_distribution = table(fixed_extinction$intrafx1, fixed_extinction$out_alone), intrafx2_distribution = table(fixed_extinction$intrafx2, fixed_extinction$out_alone),
+     interfx1_distribution = table(fixed_extinction$interfx1, fixed_extinction$out_alone), interfx2_distribution = table(fixed_extinction$interfx2, fixed_extinction$out_alone),
+     lossXY_distribution = table(fixed_extinction$lossxy, fixed_extinction$out_alone))
+```
+None of the variables clearly explains the outcome.
+
+```{r, paged.print=FALSE}
+# reshaping data to perform the logistic regression
+tmp = fixed_extinction[, c('epistasis','intrafx1','interfx1','interfx2','intrafx2','lossxy','out_alone')]
+colnames(tmp) = c('ε','αx','ξx','ξy','αy','σ','out_alone')
+for(i in colnames(tmp)[1:(length(colnames(tmp))-1)]) { tmp[,i] = as.numeric(as.character(tmp[,i])) }
+tmp$out_alone = factor(x = tmp$out_alone, levels = c('decrease_null','increase') ,ordered = T)
+
+# running logistic regression (FULL) model
+model = glm(formula = out_alone ~.,family = binomial(link = 'logit'), data = tmp)
+x2 = as.data.frame(summary(model)$coefficients); rownames(x2)[1] = 'NULL'
+x3 = as.data.frame(anova(model, test="Chisq"))[,c('Df','Deviance','Resid. Dev')]
+x2 = cbind(x2,x3); x2[nrow(x2),'AIC'] = summary(model)$aic; x2
+x2[nrow(x2),'cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2[nrow(x2),'cumulative Tjur pseudoR2']= r2_tjur(model); x2
+
+# adding individual and cumulative coefficients to the supp table
+model = glm(formula = out_alone ~ ε,family = binomial(link = 'logit'), data = tmp)
+x2['ε','AIC'] = summary(model)$aic
+x2['ε','cumulative Cragg & Uhler pseudoR2'] = x2['ε','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']
+x2['ε','cumulative Tjur pseudoR2'] = x2['ε','individual Tjur pseudoR2'] = r2_tjur(model)
+
+model = glm(formula = out_alone ~ ε + αx,family = binomial(link = 'logit'), data = tmp)
+x2['αx','AIC'] = summary(model)$aic; x2['αx','cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['αx','cumulative Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = out_alone ~ ε + αx + ξx,family = binomial(link = 'logit'), data = tmp)
+x2['ξx','AIC'] = summary(model)$aic; x2['ξx','cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['ξx','cumulative Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = out_alone ~ ε + αx + ξx + ξy,family = binomial(link = 'logit'), data = tmp)
+x2['ξy','AIC'] = summary(model)$aic; x2['ξy','cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['ξy','cumulative Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = out_alone ~ ε + αx + ξx + ξy + αy,family = binomial(link = 'logit'), data = tmp)
+x2['αy','AIC'] = summary(model)$aic; x2['αy','cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['αy','cumulative Tjur pseudoR2'] = r2_tjur(model)
+
+model = glm(formula = out_alone ~ αx,family = binomial(link = 'logit'), data = tmp)
+x2['αx','AIC'] = summary(model)$aic; x2['αx','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['αx','individual Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = out_alone ~ ξx,family = binomial(link = 'logit'), data = tmp)
+x2['ξx','AIC'] = summary(model)$aic; x2['ξx','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['ξx','individual Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = out_alone ~ ξy,family = binomial(link = 'logit'), data = tmp)
+x2['ξy','AIC'] = summary(model)$aic; x2['ξy','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['ξy','individual Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = out_alone ~ αy,family = binomial(link = 'logit'), data = tmp)
+x2['αy','AIC'] = summary(model)$aic; x2['αy','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['αy','individual Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = out_alone ~ σ,family = binomial(link = 'logit'), data = tmp)
+x2['σ','AIC'] = summary(model)$aic; x2['σ','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['σ','individual Tjur pseudoR2'] = r2_tjur(model)
+
+x2['interaction_full_name'] = c('','epistasis', 'intracellular interaction affecting conjugation of X', 'intercellular interaction affecting conjugation of X', 'intercellular interaction affecting conjugation of Y', 'intracellular interaction affecting conjugation of Y', 'interaction affecting loss')
+```
+
+```{r, paged.print=FALSE}
+# creating Supp.TableS15
+x2
+addWorksheet(wb, sheetName = "Supp.TableS15")
+writeData(wb, sheet = 15, x = x2, startCol = 1, startRow = 1, borders = 'all', rowNames = T)
+```
+all variables are important.
+The chi-square of 6969.195 (difference in deviance) with 6 degrees of freedom and an associated p-value of less than 0.001 tells us that our model as a whole fits significantly better than an empty model.
+Models explains  34.71915 % - 47.04524 % of variance. 
+(((The log-likelihood from the fitted model; The log-likelihood from the intercept-only restricted model; Minus two times the difference in the log-likelihoods;
+McFadden’s pseudo r-squared; Maximum likelihood pseudo r-squared AKA Cox & Snell; Cragg and Uhler’s pseudo r-squared AKA Nagelkerke)))
+
+
+### Cases that don't go to extinction
+
+```{r}
+# subsetting conditions that allow survival (i.e. all cases where ε = 0.1, αX = 10, γX = 10-11and ωX > 0.85)
+essential_conditions = 
+  fixed_steady_0[fixed_steady_0$epistasis == '0.1' & fixed_steady_0$conjugation == '1e-11' & fixed_steady_0$intrafx1 == '10' & (fixed_steady_0$fitness %in% c('0.9','0.95','0.975')), ]
+print(paste('there is a total of cases fulfilling the conditions for survival:', nrow(essential_conditions), ', and there is survival in:', round(100 * (nrow(fixed_steady) / nrow(essential_conditions)), digits = 2), '%, as:'))
+table(essential_conditions$survival)
+```
+
+```{r}
+print('distribution of survival outcome per variable')
+list(fitness_distribution = table(essential_conditions$fitness, essential_conditions$survival), loss_distribution = table(essential_conditions$loss, essential_conditions$survival),
+     intrafx2_distribution = table(essential_conditions$intrafx2, essential_conditions$survival), interfx1_distribution = table(essential_conditions$interfx1,essential_conditions$survival),
+     interfx2_distribution = table(essential_conditions$interfx2, essential_conditions$survival), lossxy_distribution = table(essential_conditions$lossxy, essential_conditions$survival))
+```
+
+
+```{r, paged.print=FALSE}
+# reshaping data to perform the logistic regression
+tmp = essential_conditions[, c('interfx1','interfx2','lossxy','intrafx2','survival')]
+colnames(tmp) = c('ξx','ξy','σ','αy','survival')
+for(i in colnames(tmp)[1:(length(colnames(tmp))-1)]) { tmp[,i] = as.numeric(as.character(tmp[,i])) }
+tmp$survival = factor(x = tmp$survival, levels = c('extinction','survival') ,ordered = T)
+
+# running logistic regression (FULL) model
+model = glm(formula = survival ~.,family = binomial(link = 'logit'), data = tmp)
+x2 = as.data.frame(summary(model)$coefficients); rownames(x2)[1] = 'NULL'
+x3 = as.data.frame(anova(model, test="Chisq"))[,c('Df','Deviance','Resid. Dev')]
+x2 = cbind(x2,x3); x2[nrow(x2),'AIC'] = summary(model)$aic; x2
+x2[nrow(x2),'cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2[nrow(x2),'cumulative Tjur pseudoR2']= r2_tjur(model); x2
+
+# adding individual and cumulative coefficients to the supp table
+model = glm(formula = survival ~ ξx,family = binomial(link = 'logit'), data = tmp)
+x2['ξx','AIC'] = summary(model)$aic
+x2['ξx','cumulative Cragg & Uhler pseudoR2'] = x2['ξx','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']
+x2['ξx','cumulative Tjur pseudoR2'] = x2['ξx','individual Tjur pseudoR2'] = r2_tjur(model)
+
+model = glm(formula = survival ~ ξx + ξy,family = binomial(link = 'logit'), data = tmp)
+x2['ξy','AIC'] = summary(model)$aic; x2['ξy','cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['ξy','cumulative Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = survival ~ ξx + ξy + σ,family = binomial(link = 'logit'), data = tmp)
+x2['σ','AIC'] = summary(model)$aic; x2['σ','cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['σ','cumulative Tjur pseudoR2'] = r2_tjur(model)
+
+model = glm(formula = survival ~ ξy,family = binomial(link = 'logit'), data = tmp)
+x2['ξy','AIC'] = summary(model)$aic; x2['ξy','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['ξy','individual Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = survival ~ αy,family = binomial(link = 'logit'), data = tmp)
+x2['αy','AIC'] = summary(model)$aic; x2['αy','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['αy','individual Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = survival ~ σ,family = binomial(link = 'logit'), data = tmp)
+x2['σ','AIC'] = summary(model)$aic; x2['σ','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['σ','individual Tjur pseudoR2'] = r2_tjur(model)
+
+x2['interaction_full_name'] = c('', 'intercellular interaction affecting conjugation of X', 'intercellular interaction affecting conjugation of Y', 'interaction affecting loss', 'intracellular interaction affecting conjugation of Y')
+```
+
+```{r, paged.print=FALSE}
+# creating Supp.TableS17
+x2
+addWorksheet(wb, sheetName = "Supp.TableS16")
+addWorksheet(wb, sheetName = "Supp.TableS17")
+writeData(wb, sheet = 17, x = x2, startCol = 1, startRow = 1, borders = 'all', rowNames = T)
+```
+
+Only interfx1 and interfx2 are significant.
+The chi-square of 34.37953 (difference in deviance) with 4 degrees of freedom and an associated p-value of less than 0.001 tells us that our model as a whole fits significantly better than an empty model.
+Models explains  6.947950 % - 9.229326  % of variance. 
+(((The log-likelihood from the fitted model; The log-likelihood from the intercept-only restricted model; Minus two times the difference in the log-likelihoods;
+McFadden’s pseudo r-squared; Maximum likelihood pseudo r-squared; Cragg and Uhler’s pseudo r-squared)))
+wtf no eta for lossxy?
+
+
+#### considering survival as extended time (thus including the cases of survival)
+```{r}
+fixed_steady_0['outcome'] = 'increase'
+fixed_steady_0[ fixed_steady_0$ID %in% fixed_extinction[fixed_extinction$out_alone != 'increase', 'ID'], 'outcome'] = 'decrease_null'
+table(fixed_steady_0$outcome)
+```
+
+```{r, paged.print=FALSE}
+# reshaping data to perform the logistic regression
+tmp = fixed_steady_0[, c('epistasis','intrafx1','interfx1','interfx2','intrafx2','lossxy','outcome')]
+colnames(tmp) = c('ε','αx','ξx','ξy','αy','σ','outcome')
+for(i in colnames(tmp)[1:(length(colnames(tmp))-1)]) { tmp[,i] = as.numeric(as.character(tmp[,i])) }
+tmp$outcome = factor(x = tmp$outcome, levels = c('decrease_null','increase') ,ordered = T)
+
+# running logistic regression (FULL) model
+model = glm(formula = outcome ~.,family = binomial(link = 'logit'), data = tmp)
+x2 = as.data.frame(summary(model)$coefficients); rownames(x2)[1] = 'NULL'
+x3 = as.data.frame(anova(model, test="Chisq"))[,c('Df','Deviance','Resid. Dev')]
+x2 = cbind(x2,x3); x2[nrow(x2),'AIC'] = summary(model)$aic; x2
+x2[nrow(x2),'cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2[nrow(x2),'cumulative Tjur pseudoR2']= r2_tjur(model); x2
+
+# adding individual and cumulative coefficients to the supp table
+model = glm(formula = outcome ~ ε,family = binomial(link = 'logit'), data = tmp)
+x2['ε','AIC'] = summary(model)$aic
+x2['ε','cumulative Cragg & Uhler pseudoR2'] = x2['ε','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']
+x2['ε','cumulative Tjur pseudoR2'] = x2['ε','individual Tjur pseudoR2'] = r2_tjur(model)
+
+model = glm(formula = outcome ~ ε + αx,family = binomial(link = 'logit'), data = tmp)
+x2['αx','AIC'] = summary(model)$aic; x2['αx','cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['αx','cumulative Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = outcome ~ ε + αx + ξx,family = binomial(link = 'logit'), data = tmp)
+x2['ξx','AIC'] = summary(model)$aic; x2['ξx','cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['ξx','cumulative Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = outcome ~ ε + αx + ξx + ξy,family = binomial(link = 'logit'), data = tmp)
+x2['ξy','AIC'] = summary(model)$aic; x2['ξy','cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['ξy','cumulative Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = outcome ~ ε + αx + ξx + ξy + αy,family = binomial(link = 'logit'), data = tmp)
+x2['αy','AIC'] = summary(model)$aic; x2['αy','cumulative Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['αy','cumulative Tjur pseudoR2'] = r2_tjur(model)
+
+model = glm(formula = outcome ~ αx,family = binomial(link = 'logit'), data = tmp)
+x2['αx','AIC'] = summary(model)$aic; x2['αx','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['αx','individual Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = outcome ~ ξx,family = binomial(link = 'logit'), data = tmp)
+x2['ξx','AIC'] = summary(model)$aic; x2['ξx','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['ξx','individual Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = outcome ~ ξy,family = binomial(link = 'logit'), data = tmp)
+x2['ξy','AIC'] = summary(model)$aic; x2['ξy','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['ξy','individual Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = outcome ~ αy,family = binomial(link = 'logit'), data = tmp)
+x2['αy','AIC'] = summary(model)$aic; x2['αy','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['αy','individual Tjur pseudoR2'] = r2_tjur(model)
+model = glm(formula = outcome ~ σ,family = binomial(link = 'logit'), data = tmp)
+x2['σ','AIC'] = summary(model)$aic; x2['σ','individual Cragg & Uhler pseudoR2'] = pR2(model)['r2CU']; x2['σ','individual Tjur pseudoR2'] = r2_tjur(model)
+
+x2['interaction_full_name'] = c('','epistasis', 'intracellular interaction affecting conjugation of X', 'intercellular interaction affecting conjugation of X', 'intercellular interaction affecting conjugation of Y', 'intracellular interaction affecting conjugation of Y', 'interaction affecting loss')
+```
+
+```{r, paged.print=FALSE}
+# creating Supp.TableS16
+x2
+writeData(wb, sheet = 16, x = x2, startCol = 1, startRow = 1, borders = 'all', rowNames = T)
+```
+
+all variables are important.
+The chi-square of 7866.757 (difference in deviance) with 6 degrees of freedom and an associated p-value of less than 0.001 tells us that our model as a whole fits significantly better than an empty model.
+Models explains  38.07127 - 50.08753 % of variance. 
+(((The log-likelihood from the fitted model; The log-likelihood from the intercept-only restricted model; Minus two times the difference in the log-likelihoods;
+McFadden’s pseudo r-squared; Maximum likelihood pseudo r-squared; Cragg and Uhler’s pseudo r-squared)))
+wtf no eta for lossxy?
+
+```{r}
+saveWorkbook(wb, file = '/Users/jga039/Documents/simulations/analysis/figures_tables/Supp_Tables.xlsx')
+```
