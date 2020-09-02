@@ -1,6 +1,6 @@
 # simulations_plasmid_interactions
 
-This is a repository for the data underlying the paper (includes R scripts, notebooks and raw data).
+This is a repository for the data (includes R scripts, notebooks and raw data) underlying the paper "Plasmid Interactions Can Improve Plasmid Persistence in Bacterial Populations" available at https://doi.org/10.3389/fmicb.2020.02033.
 
 The directory "final_data" contains the script used to run the simulations and the output result tables. Note that the parameter/variable notations in the script and in the tables differ from those in manuscript.
 
